@@ -88,7 +88,7 @@ async def main():
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(all_courses, f, ensure_ascii=False, indent=4)
 
-        print(f"\n✅ Курсы сохранены в {output_path}")
+        print(f"\n✅ Курсы сохранены в {output_path}. Можете отредактировать файл для сохранения конкретных курсов. Потом запустите givereq.py")
         await browser.close()
 
 
