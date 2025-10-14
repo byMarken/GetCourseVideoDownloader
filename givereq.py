@@ -176,9 +176,14 @@ async def main() -> None:
     save_root = cfg["courses_save_path"]
     quality = cfg["quality"]
 
-    # Загружаем курсы
+    if not os.path.exists("courses.json") or os.path.getsize("courses.json") == 0:
+        print("⚠️ Файл courses.json пустой или отсутствует.")
+        print("💡 Укажите ссылку на плейлист в .env и запустите givelinks.py для создания списка курсов.")
+        return
+
     with open("courses.json", "r", encoding="utf-8") as f:
         courses = json.load(f)
+
     async with async_playwright() as p:
         browser = await p.firefox.launch_persistent_context(
             USER_DATA_DIR,
@@ -191,6 +196,7 @@ async def main() -> None:
                 await process_lesson(p, browser, course["course_title"], lesson, save_root, quality)
 
         await browser.close()
+
 
 
 
