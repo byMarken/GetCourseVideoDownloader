@@ -93,7 +93,7 @@ async def convert_to_mp4_async(result_file: str) -> None:
     else:
         print("❌ Ошибка ffmpeg:", stderr.decode("utf-8", errors="ignore"))
 
-async def _read_playlist(path: str) -> str:
+def _read_playlist(path: str) -> str:
     with open(path, encoding="utf-8") as playlist:
         return playlist.read().strip()
 
