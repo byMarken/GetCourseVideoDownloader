@@ -1,35 +1,48 @@
+"""Скрипт для выгрузки списка курсов и уроков из GetCourse."""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import re
-import os
-from pathlib import Path
+
 from playwright.async_api import async_playwright
-from utils_config import get_env_config
+
 from login import ensure_login_active
+from utils_config import get_env_config
 
 USER_DATA_DIR = "session_data"
 OUTPUT_FILE = "courses.json"
 
 
 def clean_title(title: str) -> str:
-    title = re.sub(r'\b(Просмотрено|Пройдено|Завершено)\b', '', title, flags=re.IGNORECASE)
-    title = re.sub(r'\s+', ' ', title).strip()
-    return title
+    """Удаляет служебные пометки из названия и нормализует пробелы."""
+
+    cleaned = re.sub(
+        r"\b(Просмотрено|Пройдено|Завершено)\b",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
-async def main():
+async def main() -> None:
+    """Основная точка входа для получения курсов."""
+
     cfg = get_env_config()
-
     playlist_url = cfg.get("playlist_url")
-    if not playlist_url or not isinstance(playlist_url, str) or not playlist_url.startswith("http"):
+    if (
+        not playlist_url
+        or not isinstance(playlist_url, str)
+        or not playlist_url.startswith("http")
+    ):
         raise ValueError("❌ В .env не найден параметр PLAYLIST_URL с корректным URL")
 
-    output_path = OUTPUT_FILE
-
-    async with async_playwright() as p:
-        browser = await p.firefox.launch_persistent_context(
+    async with async_playwright() as playwright:
+        browser = await playwright.firefox.launch_persistent_context(
             USER_DATA_DIR,
-            headless=cfg.get("headless", True)
+            headless=cfg.get("headless", True),
         )
 
         page = await browser.new_page()
@@ -43,7 +56,7 @@ async def main():
         await page.wait_for_selector("tr.training-row")
 
         rows = await page.query_selector_all("tr.training-row")
-        courses = []
+        courses: list[tuple[str, str]] = []
 
         for row in rows:
             title_el = await row.query_selector("span.stream-title")
@@ -63,7 +76,7 @@ async def main():
             try:
                 await page.wait_for_selector("ul.lesson-list li", timeout=5000)
                 lessons = await page.query_selector_all("ul.lesson-list li")
-            except:
+            except Exception:  # noqa: BLE001
                 lessons = []
 
             lessons_data = []
@@ -80,15 +93,15 @@ async def main():
                 print(f"   🎬 {lesson_title}")
                 lessons_data.append({"title": lesson_title, "url": lesson_href})
 
-            all_courses.append({
-                "course_title": course_title,
-                "lessons": lessons_data
-            })
+            all_courses.append({"course_title": course_title, "lessons": lessons_data})
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(all_courses, f, ensure_ascii=False, indent=4)
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as output_file:
+            json.dump(all_courses, output_file, ensure_ascii=False, indent=4)
 
-        print(f"\n✅ Курсы сохранены в {output_path}. Можете отредактировать файл для сохранения конкретных курсов. Потом запустите givereq.py")
+        print(
+            f"\n✅ Курсы сохранены в {OUTPUT_FILE}. Можете отредактировать файл для "
+            "сохранения конкретных курсов. Потом запустите givereq.py"
+        )
         await browser.close()
 
 
