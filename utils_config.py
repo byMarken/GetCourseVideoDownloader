@@ -1,4 +1,9 @@
+"""Настройки приложения и работа с переменными окружения."""
+
+from __future__ import annotations
+
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
