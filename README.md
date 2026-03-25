@@ -1,13 +1,23 @@
-# GetCourseVideoDownloader
+<h1 align="center">GetCourseVideoDownloader</h1>
 
-Универсальный инструмент для загрузки видео с образовательной платформы **GetCourse**.  
-Поддерживает как **автоматический**, так и **ручной** режим работы: можно полностью автоматизировать процесс скачивания,  
-или выполнять действия вручную при необходимости.
-
-Подходит для тех, кто хочет организовать офлайн-доступ к своим обучающим материалам с GetCourse.
+<p align="center">
+  Автоматический инструмент для скачивания всех видео в плейлисте
+</p>
 
 
-## Особенности
+
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-blue"/>
+  <img src="https://img.shields.io/badge/Automation-Playwright-green"/>
+  <img src="https://img.shields.io/badge/Video-FFmpeg-red"/>
+  <img src="https://img.shields.io/badge/Async-asyncio-yellow"/>
+  <img src="https://img.shields.io/badge/license-MIT-purple"/>
+</p>
+
+
+
+## 📌 Возможности
 
 - Асинхронная загрузка сегментов видео 🚀  
 - Поддержка различных качеств (**360p–1080p**) 🎞️  
@@ -24,7 +34,7 @@
 - **Python 3.12**  
 - **FFmpeg** (должен быть добавлен в `PATH`)  
 
-## Установка (только для Windows)
+## Установка (Windows)
 
 1. **Клонируй репозиторий:**
    ```bash
@@ -101,6 +111,5 @@ python givereq.py
 
 ### ГОТОВО!
 #### Видео будут загружаться в указанную папку.
-Скоро допишу README.md...
 
 
