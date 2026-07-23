@@ -15,6 +15,10 @@
   <img src="https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white"/>
   <img src="https://img.shields.io/badge/build-passing-brightgreen"/>
 </p>
+
+<p align="center">
+</p>
+
 ## ✨ Возможности
 
 - **🖥️ GUI** — приложение на Flet с тёмной темой
