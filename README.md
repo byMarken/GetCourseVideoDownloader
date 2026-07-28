@@ -62,7 +62,7 @@
 
 ```bash
 https://github.com/markpekun/getcourse-downloader.git
-cd GetCourseVideoDownloader
+cd getcourse-downloader
 ```
 
 ### 2. Создай и активируй виртуальное окружение
