@@ -15,7 +15,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from utils_console import configure_console_output
+from app.utils_console import configure_console_output
 
 
 USER_DATA_DIR: str = "session_data"
