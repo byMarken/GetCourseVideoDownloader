@@ -15,10 +15,10 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from app.utils.browser import launch_browser
 from app.utils.console import configure_console_output
 
 
-USER_DATA_DIR: str = "session_data"
 _PRJ = Path(__file__).resolve().parent.parent.parent
 _OUTPUT_DIR = _PRJ / "app" / "data"
 _OUTPUT_FILE = str(_OUTPUT_DIR / "courses.json")
@@ -42,8 +42,8 @@ async def ensure_authenticated(
     playlist_url: str,
     wait_for_login: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    browser = await playwright.firefox.launch_persistent_context(
-        USER_DATA_DIR,
+    browser = await launch_browser(
+        playwright,
         headless=True,
     )
     page = browser.pages[0] if browser.pages else await browser.new_page()
@@ -57,8 +57,8 @@ async def ensure_authenticated(
 
     print("[INFO] Требуется авторизация. Выполните вход в браузере.")
 
-    browser = await playwright.firefox.launch_persistent_context(
-        USER_DATA_DIR,
+    browser = await launch_browser(
+        playwright,
         headless=False,
     )
     login_page = browser.pages[0] if browser.pages else await browser.new_page()
@@ -83,8 +83,8 @@ async def parse_courses(
     playlist_url: str,
     on_course_parsed: Callable[[str, int], Awaitable[None]] | None = None,
 ) -> list[dict]:
-    browser = await playwright.firefox.launch_persistent_context(
-        USER_DATA_DIR,
+    browser = await launch_browser(
+        playwright,
         headless=True,
     )
     page = browser.pages[0] if browser.pages else await browser.new_page()

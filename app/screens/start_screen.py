@@ -8,6 +8,7 @@ from playwright.async_api import async_playwright
 from app.screens.courses_screen import CoursesScreen
 from app.scripts.parse_courses import parse_courses
 from app.theme import Color, Gradient, Shadow, accent_button, body_text, divider
+from app.utils.browser import launch_browser
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DATA_PATH = _PROJECT_ROOT / "app" / "data" / "courses.json"
@@ -523,8 +524,8 @@ class StartScreen:
     async def _parse_async(self, url: str) -> None:
         try:
             async with async_playwright() as p:
-                browser = await p.firefox.launch_persistent_context(
-                    "session_data",
+                browser = await launch_browser(
+                    p,
                     headless=True,
                 )
                 page_obj = browser.pages[0] if browser.pages else await browser.new_page()
@@ -548,8 +549,8 @@ class StartScreen:
                     self._start_text_animation(self._auth_status, "Ожидаем вход")
                     self.page.update()
 
-                    login_browser = await p.firefox.launch_persistent_context(
-                        "session_data",
+                    login_browser = await launch_browser(
+                        p,
                         headless=False,
                     )
                     login_page = (

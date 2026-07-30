@@ -17,12 +17,12 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from app.utils.ffmpeg import get_ffmpeg_path
+from app.utils.browser import launch_browser
 from app.utils.console import configure_console_output
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
-USER_DATA_DIR = "session_data"
 _COURSES_PATH = Path(_PROJECT_ROOT) / "app" / "data" / "courses.json"
 
 configure_console_output()
@@ -235,8 +235,8 @@ async def _authentication_required(page: Any) -> bool:
 
 
 async def ensure_authenticated(playwright: Any, url: str) -> bool:
-    browser = await playwright.firefox.launch_persistent_context(
-        USER_DATA_DIR,
+    browser = await launch_browser(
+        playwright,
         headless=True,
     )
     try:
@@ -254,8 +254,8 @@ async def ensure_authenticated(playwright: Any, url: str) -> bool:
 
     print("\n  🔐 Требуется авторизация. Открываю браузер для входа...\n")
     await asyncio.sleep(5)
-    browser = await playwright.firefox.launch_persistent_context(
-        USER_DATA_DIR,
+    browser = await launch_browser(
+        playwright,
         headless=False,
     )
     login_page = browser.pages[0] if browser.pages else await browser.new_page()
@@ -317,8 +317,8 @@ async def process_lesson(
             return False
 
         print("  🔐 Открываю браузер для ручного входа...")
-        auth_browser = await playwright.firefox.launch_persistent_context(
-            USER_DATA_DIR,
+        auth_browser = await launch_browser(
+            playwright,
             headless=False,
         )
         auth_page = auth_browser.pages[0] if auth_browser.pages else await auth_browser.new_page()
@@ -422,8 +422,8 @@ async def main() -> int:
             first_url = entries[0]["lesson"]["url"]
             await ensure_authenticated(playwright, first_url)
 
-        browser = await playwright.firefox.launch_persistent_context(
-            USER_DATA_DIR,
+        browser = await launch_browser(
+            playwright,
             headless=True,
         )
 
