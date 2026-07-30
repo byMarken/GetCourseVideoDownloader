@@ -156,7 +156,7 @@ GetCourseVideoDownloader/
 │   │   ├── givereq.py           # ⬇️ Скачивание видео (Playwright + aiohttp + ffmpeg)
 │   │   └── parser_service.py    # 🔗 Мост между GUI и parse_courses.py
 │   └── session_data/            # 🍪 Сессия Firefox (persistent context)
-├── utils_console.py             # 🛠 Утилита UTF-8 для консоли
+├── app/utils_console.py         # 🛠 Утилита UTF-8 для консоли
 ├── req.txt                      # 📦 Зависимости
 └── README.md                    # 📖 Этот файл
 ```
