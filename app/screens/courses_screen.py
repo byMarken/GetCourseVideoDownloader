@@ -1098,6 +1098,7 @@ class CoursesScreen:
                 encoding="utf-8",
             )
             self._proc_stdin = proc.stdin
+            download_issue: str | None = None
 
             for raw_line in proc.stdout or []:
                 line = raw_line.rstrip("\n\r")
@@ -1106,6 +1107,9 @@ class CoursesScreen:
                 print(line)
 
                 check = line.lower()
+
+                if "master playlist не получен" in check:
+                    download_issue = "Master playlist не получен"
 
                 if "открываю браузер" in check and "входа" in check:
                     page.run_thread(lambda: self._switch_overlay_to_auth())
@@ -1126,7 +1130,14 @@ class CoursesScreen:
 
             if proc.returncode == 0:
                 print("✅ Загрузка завершена")
+                print("Сэкономил время? Поддержи проект")
+                print("   https://github.com/markpekun/getcourse-downloader")
                 page.run_thread(lambda: self._finish_download("Загрузка завершена"))
+            elif proc.returncode == 2:
+                message = download_issue or "Не удалось скачать все выбранные уроки"
+                page.run_thread(
+                    lambda: self._finish_download(message, is_warning=True)
+                )
             else:
                 err = f"Код ошибки: {proc.returncode}"
                 print(f"❌ {err}")
@@ -1142,66 +1153,182 @@ class CoursesScreen:
             except Exception:
                 pass
 
-    def _finish_download(self, message: str, is_error: bool = False):
+    def _finish_download(
+        self, message: str, is_error: bool = False, is_warning: bool = False
+    ):
         self._downloading = False
-        self._show_completion_overlay(message, is_error)
+        self._show_completion_overlay(message, is_error, is_warning)
 
-    def _show_completion_overlay(self, message: str, is_error: bool = False):
-        icon_name = ft.Icons.CHECK_CIRCLE_ROUNDED if not is_error else ft.Icons.ERROR_ROUNDED
-        icon_color = Color.GREEN if not is_error else Color.RED
-        title = "Загружено" if not is_error else "Ошибка"
+    def _show_completion_overlay(
+        self, message: str, is_error: bool = False, is_warning: bool = False
+    ):
+        if is_error:
+            icon_name, icon_color, title = ft.Icons.ERROR_ROUNDED, Color.RED, "Ошибка"
+        elif is_warning:
+            icon_name, icon_color, title = (
+                ft.Icons.WARNING_AMBER_ROUNDED,
+                Color.YELLOW,
+                "Ошибка загрузки",
+            )
+        else:
+            icon_name, icon_color, title = (
+                ft.Icons.CHECK_CIRCLE_ROUNDED,
+                Color.GREEN,
+                "Загружено",
+            )
 
-        self._overlay_card.content = ft.Column(
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=16,
-            controls=[
-                ft.Row(
+        # --- Close button (X) with hover effects ---
+        close_button = ft.IconButton(
+            icon=ft.Icons.CLOSE,
+            icon_size=20,
+            icon_color=Color.TEXT_SECONDARY,
+            padding=8,
+            hover_color="rgba(255,77,79,0.12)",
+            splash_color="rgba(255,77,79,0.18)",
+            mouse_cursor=ft.MouseCursor.CLICK,
+            on_click=self._close_completion_overlay,
+        )
+        close_container = ft.Container(
+            content=close_button,
+            border_radius=10,
+            bgcolor="rgba(255,255,255,0.0)",
+            scale=1.0,
+            animate_scale=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+            animate=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+        )
+
+        def _on_close_hover(e):
+            if e.data == "true":
+                close_button.icon_color = "#ff4d4f"
+                close_container.scale = 1.1
+                close_container.bgcolor = "rgba(255,77,79,0.12)"
+                close_container.shadow = ft.BoxShadow(
+                    blur_radius=24,
+                    color="rgba(255,77,79,0.45)",
+                    offset=ft.Offset(0, 0),
+                )
+            else:
+                close_button.icon_color = Color.TEXT_SECONDARY
+                close_container.scale = 1.0
+                close_container.bgcolor = "rgba(255,255,255,0.0)"
+                close_container.shadow = None
+            self.page.update()
+
+        close_container.on_hover = _on_close_hover
+
+        # --- Build controls ---
+        controls = [
+            # Close button row — shifted right and up to sit ~19 px from card corner
+            ft.Container(
+                margin=ft.Margin.only(right=-5, top=-5),
+                content=ft.Row(
                     alignment=ft.MainAxisAlignment.END,
-                    controls=[
-                        ft.Container(
-                            content=ft.Icon(ft.Icons.CLOSE, size=20, color=Color.TEXT_SECONDARY),
-                            padding=ft.Padding.all(4),
-                            border_radius=6,
-                            ink=True,
-                            on_click=self._close_completion_overlay,
-                        ),
-                    ],
+                    controls=[close_container],
                 ),
+            ),
+            ft.Container(height=12),
+            # Checkmark icon
+            ft.Container(
+                width=64, height=64,
+                border_radius=32,
+                bgcolor=ft.Colors.with_opacity(0.15, icon_color),
+                content=ft.Icon(icon_name, size=36, color=icon_color),
+            ),
+            ft.Container(height=18),
+            # Title
+            ft.Text(
+                title,
+                size=22,
+                weight=ft.FontWeight.W_700,
+                color=Color.TEXT,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            ft.Container(height=8),
+            # Message
+            ft.Text(
+                message,
+                size=14,
+                color=Color.TEXT_SECONDARY,
+                text_align=ft.TextAlign.CENTER,
+            ),
+        ]
+
+        if not is_error and not is_warning:
+            # --- Horizontal divider ---
+            controls.append(ft.Container(height=18))
+            controls.append(
                 ft.Container(
-                    width=64, height=64,
-                    border_radius=32,
-                    bgcolor=ft.Colors.with_opacity(0.15, icon_color),
-                    content=ft.Icon(icon_name, size=36, color=icon_color),
+                    height=1,
+                    width=380,
+                    bgcolor="rgba(255,255,255,0.07)",
                 ),
+            )
+            # Keep the support action visually separate from the completion message.
+            controls.append(ft.Container(height=96))
+
+            # --- Support text: one line, no star icon, secondary style ---
+            controls.append(
                 ft.Text(
-                    title,
-                    size=22,
-                    weight=ft.FontWeight.W_700,
-                    color=Color.TEXT,
-                    text_align=ft.TextAlign.CENTER,
-                ),
-                ft.Text(
-                    message,
-                    size=14,
+                    "Сэкономил время? Поддержи проект",
+                    size=15,
+                    weight=ft.FontWeight.W_400,
                     color=Color.TEXT_SECONDARY,
                     text_align=ft.TextAlign.CENTER,
                 ),
-                ft.Container(
-                    content=ft.Text(
-                        "Закрыть",
-                        size=15,
-                        weight=ft.FontWeight.W_600,
-                        color=Color.TEXT,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                    width=200,
-                    padding=ft.Padding.symmetric(horizontal=24, vertical=12),
-                    border_radius=10,
-                    gradient=Gradient.ACCENT if not is_error else Gradient.SUNSET,
-                    ink=True,
-                    on_click=self._close_completion_overlay,
+            )
+            controls.append(ft.Container(height=20))
+
+            # --- Star button: full width of content area ---
+            star_btn = ft.Container(
+                content=ft.Row(
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=8,
+                    controls=[
+                        ft.Icon(ft.Icons.STAR_ROUNDED, size=18, color="#F59E0B"),
+                        ft.Text(
+                            "Поддержать звездой",
+                            size=15,
+                            weight=ft.FontWeight.W_600,
+                            color=Color.TEXT,
+                        ),
+                    ],
                 ),
-            ],
+                width=452,
+                padding=ft.Padding.symmetric(horizontal=28, vertical=12),
+                border_radius=14,
+                border=ft.Border.all(1, "rgba(255,255,255,0.12)"),
+                bgcolor="rgba(255,255,255,0.02)",
+                scale=1.0,
+                animate_scale=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+                animate=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+                on_click=lambda e: (
+                    self._close_completion_overlay(e),
+                    asyncio.create_task(
+                        self.page.launch_url("https://github.com/markpekun/getcourse-downloader")
+                    ),
+                ),
+            )
+
+            def _on_star_hover(e):
+                if e.data == "true":
+                    star_btn.scale = 1.02
+                    star_btn.border = ft.Border.all(1, "rgba(124,58,237,0.35)")
+                    star_btn.bgcolor = "rgba(124,58,237,0.07)"
+                else:
+                    star_btn.scale = 1.0
+                    star_btn.border = ft.Border.all(1, "rgba(255,255,255,0.12)")
+                    star_btn.bgcolor = "rgba(255,255,255,0.02)"
+                self.page.update()
+
+            star_btn.on_hover = _on_star_hover
+            controls.append(star_btn)
+
+        controls.append(ft.Container(height=8))
+
+        self._overlay_card.content = ft.Column(
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=0,
+            controls=controls,
         )
         self.overlay.visible = True
         self.page.update()
