@@ -1,4 +1,18 @@
 <p align="center">
+  <img src="https://img.shields.io/badge/🔧_СТАТУС-В_РАЗРАБОТКЕ-orange?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/⚠️_ВЕДУТСЯ_РАБОТЫ-FF6F00?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/🐛_ИСПРАВЛЯЮТСЯ_БАГИ-FF0000?style=for-the-badge"/>
+</p>
+
+<p align="center">
+  <b>
+    <span style="color:#FF6F00;">🚧 Проект сейчас в процессе отладки и доработки</span><br>
+    <span style="color:#aaa;">Ведутся работы по исправлению перехвата m3u8 и других функций</span><br>
+    <span style="color:#888;">Скоро всё заработает! Следите за обновлениями</span>
+  </b>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white"/>
   <img src="https://img.shields.io/badge/UI-Flet-purple?logo=flutter&logoColor=white"/>
   <img src="https://img.shields.io/badge/Automation-Playwright-green?logo=playwright&logoColor=white"/>
