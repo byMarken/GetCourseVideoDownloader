@@ -5,3 +5,4 @@ session_data/
 .venv
 app/session_data
 app/data
+resources

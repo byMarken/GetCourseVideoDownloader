@@ -16,7 +16,8 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from app.utils_console import configure_console_output
+from app.utils.ffmpeg import get_ffmpeg_path
+from app.utils.console import configure_console_output
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
@@ -168,8 +169,9 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
 
         print(f"\r  Сегментов: {len(segments)}/{total} ({len(segments)*100//total}%)")
 
+        ffmpeg_path = get_ffmpeg_path()
         process = await asyncio.create_subprocess_exec(
-            "ffmpeg",
+            ffmpeg_path,
             "-y",
             "-i", ts_file,
             "-c", "copy",
