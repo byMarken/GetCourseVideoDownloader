@@ -388,6 +388,21 @@ class CoursesScreen:
                                     border_radius=6,
                                     bgcolor="rgba(124,58,237,0.12)",
                                 ),
+                                ft.Container(
+                                    content=ft.Icon(
+                                        ft.Icons.TELEGRAM,
+                                        size=19,
+                                        color="#2AABEE",
+                                    ),
+                                    padding=ft.Padding.all(7),
+                                    border_radius=8,
+                                    bgcolor="rgba(42,171,238,0.10)",
+                                    ink=True,
+                                    tooltip="Написать в поддержку",
+                                    on_click=lambda _: asyncio.create_task(
+                                        self.page.launch_url("https://t.me/No_Resp_404")
+                                    ),
+                                ),
                             ],
                         ),
                     ),
