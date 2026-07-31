@@ -1,225 +1,87 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white"/>
-  <img src="https://img.shields.io/badge/UI-Flet-purple?logo=flutter&logoColor=white"/>
-  <img src="https://img.shields.io/badge/Automation-Playwright-green?logo=playwright&logoColor=white"/>
-  <img src="https://img.shields.io/badge/Async-aiohttp-yellow"/>
-  <img src="https://img.shields.io/badge/Video-FFmpeg-red?logo=ffmpeg&logoColor=white"/>
-  <img src="https://img.shields.io/badge/license-MIT-purple"/>
-</p>
-
-<h1 align="center">getcourse-downloader</h1>
-
-<p align="center">
-  <b>Автоматическая загрузка видео с GetCourse с сохранением структуры курса, поддержкой авторизации, HLS (m3u8), выбором качества и возможностью продолжения загрузк</b>
-  <br>
   <img src="https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white"/>
-  <img src="https://img.shields.io/badge/build-passing-brightgreen"/>
+  <img src="https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Flet-0.85-purple?logo=flutter&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Playwright-1.61-green?logo=playwright&logoColor=white"/>
+  <img src="https://img.shields.io/badge/aiohttp-3.14-yellow?logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/FFmpeg-red?logo=ffmpeg&logoColor=white"/>
+  <img src="https://img.shields.io/badge/License-MIT-green"/>
+</p>
+
+<h1 align="center">GetCourse Video Downloader</h1>
+
+<p align="center">
+  Скачивайте видео с GetCourse на компьютер — просто и быстро.
 </p>
 
 <p align="center">
 </p>
 
-## ✨ Возможности
+---
 
-- **🖥️ GUI** — приложение на Flet с тёмной темой
-- **📋 Просмотр курсов** — удобный список с раскрывающимися карточками и поиском
-- **🎯 Выборочное скачивание** — отмечай только нужные уроки через чекбоксы
-- **🎞️ Выбор качества** — 360p / 480p / 720p / 1080p / Auto (автоматический выбор максимального качества)
-- **🔐 Авторизация в браузере** — проверка сессии, при необходимости — вход через Firefox
-- **🍪 Persistent-сессия** — данные входа сохраняются в `session_data/` для повторного использования
-- **⚡ Асинхронная загрузка** — сегменты видео скачиваются конкурентно (до 10 одновременно)
-- **📁 Конвертация FFmpeg** — склейка `.ts` сегментов в `.mp4`
-- **📂 Сохранение структуры** — курсы → папки, видео в соответствующих директориях
-- **🔍 Поиск по урокам** — фильтрация списка в реальном времени
-- **🚫 Удаление курсов** — кнопка для сброса и загрузки нового списка
+## Как скачать
 
+1. **Скачайте** [GetCourseVideoDownloader-win-x64.zip](https://github.com/markpekun/getcourse-downloader/releases/latest).
+2. **Распакуйте** архив в любую папку.
+3. **Запустите** `GetCourseVideoDownloader.exe`.
 
+Ничего устанавливать не нужно - Python, FFmpeg и браузер уже внутри.
 
-## 📋 Требования
+## Как пользоваться
 
-> Эти требования нужны только для запуска из исходников. Готовый [exe из Releases](https://github.com/markpekun/getcourse-downloader/releases) уже включает всё необходимое.
+1. Вставьте ссылку на страницу курса в поле и нажмите **«Загрузить курсы»**.
+   Например: `https://school.example/teach/control/stream/view/id/123456789`
+2. Потребуется вход - откроется браузер, войдите в аккаунт и нажмите **«Продолжить»**. В следующий раз вход не понадобится.
+3. Отметьте нужные уроки галочками.
+4. Выберите качество видео и папку для сохранения.
+5. Нажмите **«Скачать выбранное»** и дождитесь завершения.
 
-| Компонент | Версия |
-|-----------|--------|
-| **ОС** | Windows 10 / 11 |
-| **Python** | 3.12 или выше |
-| **FFmpeg** | Любая (должен быть в `PATH`) |
-| **Браузер** | Firefox (устанавливается автоматически через Playwright) |
+Готово — видео лежат в выбранной папке.
 
+## Частые вопросы
 
+**Windows пишет «Неизвестный издатель»?**
+Нажмите **«Подробнее» → «Выполнить в любом случае»**. Это нормально — программа не подписана.
 
-## 📦 Готовый .exe (Windows)
+**Первый запуск долгий?**
+Приложение распаковывает нужные файлы (~10 секунд). Это происходит один раз.
 
-Ничего устанавливать не нужно — Python, FFmpeg и Firefox уже включены в сборку.
+**При обновлении пропадают курсы и вход?**
+Скачайте новый архив и перенесите папки `data` и `session_data` в новую — всё сохранится.
 
-1. Скачай [**`GetCourseVideoDownloader-win-x64.zip`**](https://github.com/markpekun/getcourse-downloader/releases/download/v0.1.0/GetCourseVideoDownloader-win-x64.zip).
-2. Распакуй архив в любую папку и запусти **`GetCourseVideoDownloader.exe`**.
+## Запуск из исходного кода
 
-
-Рядом с exe лежат/создаются рабочие папки:
-
-```
-GetCourseVideoDownloader/
-├── GetCourseVideoDownloader.exe
-├── resources/        # ffmpeg.exe + браузер Firefox (не удаляй!)
-├── data/             # courses.json, settings.json
-└── session_data/     # вход в аккаунт (авторизация)
-```
-
-- Windows SmartScreen может предупредить о «неизвестном издателе» (exe не подписан). Нажми **«Подробнее» → «Выполнить в любом случае»**.
-
-
-## 🚀 Установка (из исходников)
-
-### 1. Клонируй репозиторий
+Для разработчиков. Требуется [Python 3.12+](https://www.python.org/downloads/).
 
 ```bash
-https://github.com/markpekun/getcourse-downloader.git
+# клонируйте репозиторий
+git clone https://github.com/markpekun/getcourse-downloader.git
 cd getcourse-downloader
-```
 
-### 2. Создай и активируй виртуальное окружение
-
-```bash
+# создайте и активируйте виртуальное окружение
 python -m venv .venv
 .venv\Scripts\activate
-```
 
-### 3. Установи зависимости
-
-```bash
+# установите зависимости
 pip install -r req.txt
-```
 
-### 4. Установи браузер Playwright
-
-```bash
+# установите браузер для Playwright
 playwright install firefox
-```
 
-### 5. Проверь FFmpeg
-
-FFmpeg нужен для конвертации `.ts` сегментов в `.mp4`. Проверь установку:
-
-```bash
-ffmpeg -version
-```
-
-Если не установлен — проще всего через winget:
-
-```powershell
+# установите FFmpeg (если ещё нет) — через winget:
 winget install --id Gyan.FFmpeg -e
+# или скачайте с официального сайта: https://ffmpeg.org/download.html
+# FFmpeg должен быть добавлен в PATH (winget делает это автоматически)
 ```
 
-Или скачай вручную с [ffmpeg.org](https://ffmpeg.org/download.html), распакуй и добавь `bin` в `PATH`.
-
-
-## 🎮 Использование
-
-### Запуск приложения
+Запуск:
 
 ```bash
 python -m app.main
 ```
 
-### Пошаговый сценарий
+---
 
-1. **Загрузи курсы** 🏁
-   - Вставь ссылку на страницу плейлиста GetCourse (например, `https://school.example/teach/control/stream/view/id/123456789`)
-   - Нажми **«Загрузить курсы»** или `Enter`
-
-2. **Авторизация** (если требуется) 🔐
-   - Автоматически откроется Firefox
-   - Войди в аккаунт GetCourse
-   - Нажми **«Продолжить»** в приложении
-   - Сессия сохранится — в следующий раз авторизация не понадобится
-
-3. **Выбери уроки** ☑️
-   - Откроется экран со списком курсов и уроков
-   - Используй поиск для фильтрации
-   - Отмечай нужные уроки чекбоксами (или **«Выбрать всё»**/**«Убрать всё»**)
-
-4. **Настрой параметры** ⚙️
-   - **Качество**: Auto / 1080p / 720p / 480p / 360p
-   - **Папка сохранения**: нажми на иконку папки и выбери директорию
-
-5. **Скачай** 📥
-   - Нажми **«Скачать выбранное»**
-   - Наблюдай за процессом в реальном времени
-   - После завершения закрой оверлей
-
-
-## 🧱 Структура проекта
-
-```
-GetCourseVideoDownloader/
-├── main.py                      # 🚀 Точка входа (Flet-приложение + режим воркера)
-├── app/
-│   ├── main.py                  # 🖥️ Логика Flet-приложения
-│   ├── theme.py                 # 🎨 Тёмная тема: цвета, градиенты, тени, UI-компоненты
-│   ├── data/
-│   │   ├── courses.json         # 📋 Распарсенные курсы и уроки (создаётся при парсинге)
-│   │   └── settings.json        # ⚙️ Сохранённый путь для скачивания
-│   ├── screens/
-│   │   ├── start_screen.py      # 🏠 Стартовый экран (ввод ссылки, авторизация)
-│   │   └── courses_screen.py    # 📚 Экран курсов (список, поиск, скачивание)
-│   ├── scripts/
-│   │   └── parse_courses.py     # 🔍 Парсинг курсов через Playwright
-│   ├── services/
-│   │   ├── givereq.py           # ⬇️ Скачивание видео (Playwright + aiohttp + ffmpeg)
-│   │   └── parser_service.py    # 🔗 Мост между GUI и parse_courses.py
-│   └── utils/
-│       ├── paths.py             # 🗺️ Frozen-aware пути (data/, resources/, session_data/)
-│       ├── browser.py           # 🌐 Запуск Firefox (persistent context)
-│       ├── ffmpeg.py            # 🎞️ Поиск ffmpeg (resources/ или PATH)
-│       └── console.py           # 🛠 Утилита UTF-8 для консоли
-├── session_data/                # 🍪 Сессия Firefox (persistent context)
-├── req.txt                      # 📦 Зависимости
-└── README.md                    # 📖 Этот файл
-```
-
-
-## ⚙️ Детали работы
-
-### 🔄 Как это работает под капотом
-
-1. **Парсинг** — Playwright открывает Firefox (скрытый), заходит по ссылке плейлиста, собирает все курсы и ссылки на уроки → сохраняет в `courses.json`
-2. **Авторизация** — используется Firefox **persistent context** (`session_data/`) — куки и localStorage сохраняются между запусками
-3. **Загрузка** — для каждого урока открывается страница, перехватывается ответ с **m3u8 master-плейлистом**, парсятся доступные качества
-4. **Сегменты** — из выбранного качества читаются `.ts`/`.bin` сегменты и скачиваются **асинхронно** (aiohttp + asyncio.Semaphore)
-5. **Конвертация** — все сегменты склеиваются в `.ts`, затем FFmpeg конвертирует в `.mp4` (codec copy, без пережатия)
-
-### 🌐 Как выглядит ссылка на плейлист
-
-У каждого автора курсов на GetCourse свой адрес школы. Он может быть как на собственном домене, так и на поддомене getcourse:
-
-```
-https://school.example/teach/control/stream/view/id/123456789   ← пример
-https://ваша-школа.getcourse.ru/teach/control/stream/view/id/123456789
-https://уроки.ваш-домен.рф/teach/control/stream/view/id/123456789
-```
-
-`school.example` — это просто домен конкретного автора курсов. У тебя будет свой адрес, который тебе выдала школа/автор.
-
-
-## 🧰 Зависимости
-
-| Пакет | Назначение |
-|-------|-----------|
-| **flet** (0.85) | UI-фреймворк (Flutter-based) |
-| **playwright** (1.61) | Управление браузером Firefox |
-| **aiohttp** (3.14) | Асинхронная загрузка сегментов |
-| **ffmpeg** (отдельно) | Конвертация TS → MP4 |
-
-Полный список — в [req.txt](req.txt).
-
-
-
-
-## ⚖️ Лицензия
-
-Проект распространяется под лицензией **MIT**. Подробнее — в файле [LICENSE](LICENSE).
-
-
-## ❓ Поддержка
-Если возникли какие-либо проблемы или вопросы по использованию программы — пишите в Telegram: @No_Resp_404
+*Исходный код проекта: [markpekun/getcourse-downloader](https://github.com/markpekun/getcourse-downloader).*
+*Лицензия: MIT.*
+*Вопросы: [@No_Resp_404](https://t.me/No_Resp_404)*
