@@ -14,6 +14,9 @@ from app.utils.paths import data_dir
 _COURSES_PATH = data_dir() / "courses.json"
 _SETTINGS_PATH = data_dir() / "settings.json"
 
+# Префикс итоговой сводки воркера — должен совпадать с givereq.py
+_SUMMARY_PREFIX = "[SUMMARY]"
+
 _COURSE_COLORS = [
     "#7C3AED",
     "#EC4899",
@@ -958,6 +961,13 @@ class CoursesScreen:
             return Color.RED
         return Color.TEXT_SECONDARY
 
+    @staticmethod
+    def _format_summary(summary_lines: list[str]) -> str | None:
+        """Собирает итоговую сводку загрузки из строк воркера."""
+        if not summary_lines:
+            return None
+        return "\n".join(summary_lines)
+
     def _scroll_smooth(self):
         try:
             loop = asyncio.get_running_loop()
@@ -1166,11 +1176,17 @@ class CoursesScreen:
             )
             self._proc_stdin = proc.stdin
             download_issue: str | None = None
+            summary_lines: list[str] = []
 
             for raw_line in proc.stdout or []:
                 line = raw_line.rstrip("\n\r")
                 if not line:
                     continue
+
+                if line.startswith(_SUMMARY_PREFIX):
+                    line = line[len(_SUMMARY_PREFIX) :].strip()
+                    summary_lines.append(line)
+
                 print(line)
 
                 check = line.lower()
@@ -1195,13 +1211,15 @@ class CoursesScreen:
 
             proc.wait()
 
+            summary = CoursesScreen._format_summary(summary_lines)
+
             if proc.returncode == 0:
                 print("✅ Загрузка завершена")
                 print("Сэкономил время? Поддержи проект")
                 print("   https://github.com/markpekun/getcourse-downloader")
-                page.run_thread(lambda: self._finish_download("Загрузка завершена"))
+                page.run_thread(lambda: self._finish_download(summary or "Загрузка завершена"))
             elif proc.returncode == 2:
-                message = download_issue or "Не удалось скачать все выбранные уроки"
+                message = summary or download_issue or "Не удалось скачать все выбранные уроки"
                 page.run_thread(lambda: self._finish_download(message, is_warning=True))
             else:
                 err = f"Код ошибки: {proc.returncode}"
