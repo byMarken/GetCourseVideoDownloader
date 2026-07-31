@@ -22,7 +22,7 @@
 
 ## Как скачать
 
-1. **Скачайте** [GetCourseVideoDownloader-win-x64.zip](https://github.com/markpekun/getcourse-downloader/releases/latest).
+1. **Скачайте** [GetCourseVideoDownloader-win-x64.zip](https://github.com/markpekun/getcourse-downloader/releases/download/v0.1.0/GetCourseVideoDownloader-win-x64.zip).
 2. **Распакуйте** архив в любую папку.
 3. **Запустите** `GetCourseVideoDownloader.exe`.
 
@@ -45,10 +45,7 @@
 Нажмите **«Подробнее» → «Выполнить в любом случае»**. Это нормально — программа не подписана.
 
 **Первый запуск долгий?**
-Приложение распаковывает нужные файлы (~10 секунд). Это происходит один раз.
-
-**При обновлении пропадают курсы и вход?**
-Скачайте новый архив и перенесите папки `data` и `session_data` в новую — всё сохранится.
+Приложение распаковывает нужные файлы.
 
 ## Запуск из исходного кода
 
@@ -81,7 +78,7 @@ winget install --id Gyan.FFmpeg -e
 python -m app.main
 ```
 
----
+
 
 *Исходный код проекта: [markpekun/getcourse-downloader](https://github.com/markpekun/getcourse-downloader).*
 *Лицензия: MIT.*
