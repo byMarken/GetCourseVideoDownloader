@@ -2,28 +2,29 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
 import time
-from typing import Any
-
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from app.utils.ffmpeg import get_ffmpeg_path
-from app.utils.browser import launch_browser
-from app.utils.console import configure_console_output
-from app.utils.paths import data_dir
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
+
+from app.utils.browser import launch_browser
+from app.utils.console import configure_console_output
+from app.utils.ffmpeg import get_ffmpeg_path
+from app.utils.paths import data_dir
 
 _COURSES_PATH = data_dir() / "courses.json"
 
@@ -101,9 +102,10 @@ async def _countdown(seconds: int, message: str = "Ожидание") -> None:
 
 
 async def _download_video(playlist_url: str, output_path: str) -> bool:
-    import aiohttp
     import shutil
     import tempfile
+
+    import aiohttp
 
     output_mp4 = output_path + ".mp4"
 
@@ -117,7 +119,8 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
             playlist = await resp.text()
 
         segment_urls = [
-            line.strip() for line in playlist.splitlines()
+            line.strip()
+            for line in playlist.splitlines()
             if line.strip() and not line.startswith("#") and (".bin" in line or ".ts" in line)
         ]
         total = len(segment_urls)
@@ -146,12 +149,17 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
                         if now - last_report_time >= 2.0:
                             last_report_time = now
                             pct = downloaded_count * 100 // total
-                            print(f"\r  Сегменты: {downloaded_count}/{total} ({pct}%)", end="", flush=True)
+                            print(
+                                f"\r  Сегменты: {downloaded_count}/{total} ({pct}%)",
+                                end="",
+                                flush=True,
+                            )
                         return path
                     except Exception:
                         if attempt == 2:
                             return None
                         await asyncio.sleep(1)
+            return None
 
         tasks = [download_seg(i, u) for i, u in enumerate(segment_urls)]
         results = await asyncio.gather(*tasks)
@@ -169,7 +177,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
 
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-        print(f"\r  Сегментов: {len(segments)}/{total} ({len(segments)*100//total}%)")
+        print(f"\r  Сегментов: {len(segments)}/{total} ({len(segments) * 100 // total}%)")
 
         ffmpeg_path = get_ffmpeg_path()
         ffmpeg_flags = 0
@@ -178,9 +186,12 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
         process = await asyncio.create_subprocess_exec(
             ffmpeg_path,
             "-y",
-            "-i", ts_file,
-            "-c", "copy",
-            "-bsf:a", "aac_adtstoasc",
+            "-i",
+            ts_file,
+            "-c",
+            "copy",
+            "-bsf:a",
+            "aac_adtstoasc",
             output_mp4,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -188,7 +199,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
         )
         try:
             _, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             process.kill()
             print("  ✗ Ошибка: ffmpeg завис (таймаут 5 мин)")
             os.remove(ts_file)
@@ -196,7 +207,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
         os.remove(ts_file)
         if process.returncode != 0:
             err = stderr.decode("utf-8", errors="replace")[-300:]
-            print(f"  ✗ Ошибка конвертации")
+            print(f"  ✗ Ошибка конвертации: {err}")
             return False
 
         return True
@@ -224,10 +235,8 @@ async def _open_page_with_retries(
 
 
 async def _authentication_required(page: Any) -> bool:
-    try:
+    with contextlib.suppress(PlaywrightError):
         await page.wait_for_load_state("domcontentloaded", timeout=10_000)
-    except PlaywrightError:
-        pass
 
     await page.wait_for_timeout(500)
     current_url = page.url.lower()
@@ -241,9 +250,7 @@ async def ensure_authenticated(playwright: Any, url: str) -> bool:
     )
     try:
         page = browser.pages[0] if browser.pages else await browser.new_page()
-        await _open_page_with_retries(
-            page, url, purpose="страницу для проверки авторизации"
-        )
+        await _open_page_with_retries(page, url, purpose="страницу для проверки авторизации")
         needs_auth = await _authentication_required(page)
     finally:
         await browser.close()
@@ -366,8 +373,6 @@ async def process_lesson(
             print("  ⚠ Не удалось подобрать качество")
             continue
 
-        q = _extract_quality(selected_url)
-
         course_path = os.path.join(save_root, course_title)
         os.makedirs(course_path, exist_ok=True)
         safe_title = sanitize_filename(lesson_title)
@@ -375,13 +380,15 @@ async def process_lesson(
         if len(master_playlists) > 1:
             video_dir = os.path.join(course_path, safe_title)
             os.makedirs(video_dir, exist_ok=True)
-            downloaded = await _download_video(
-                selected_url, os.path.join(video_dir, f"video_{idx}")
-            ) or downloaded
+            downloaded = (
+                await _download_video(selected_url, os.path.join(video_dir, f"video_{idx}"))
+                or downloaded
+            )
         else:
-            downloaded = await _download_video(
-                selected_url, os.path.join(course_path, safe_title)
-            ) or downloaded
+            downloaded = (
+                await _download_video(selected_url, os.path.join(course_path, safe_title))
+                or downloaded
+            )
 
         print()
 
@@ -399,23 +406,25 @@ async def main() -> int:
     quality_setting = args.quality
 
     if args.lessons_file:
-        with open(args.lessons_file, "r", encoding="utf-8") as f:
+        with open(args.lessons_file, encoding="utf-8") as f:
             entries = json.load(f)
     else:
         if not _COURSES_PATH.exists() or _COURSES_PATH.stat().st_size == 0:
             print("  ⚠ Файл courses.json пустой или отсутствует.")
             return 1
 
-        with open(_COURSES_PATH, "r", encoding="utf-8") as courses_file:
+        with open(_COURSES_PATH, encoding="utf-8") as courses_file:
             courses = json.load(courses_file)
 
         entries = []
         for course in courses:
             for lesson in course["lessons"]:
-                entries.append({
-                    "course_title": course["course_title"],
-                    "lesson": lesson,
-                })
+                entries.append(
+                    {
+                        "course_title": course["course_title"],
+                        "lesson": lesson,
+                    }
+                )
 
     async with async_playwright() as playwright:
         if entries:

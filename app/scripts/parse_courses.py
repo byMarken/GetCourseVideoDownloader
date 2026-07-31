@@ -104,7 +104,7 @@ async def parse_courses(
             course_title: str = await title_el.inner_text() if title_el else "Без названия"
 
             link_el = await row.query_selector("a")
-            href: str = await link_el.get_attribute("href") if link_el else "#"
+            href = (await link_el.get_attribute("href") if link_el else None) or "#"
             href = urljoin(playlist_url, href)
 
             courses.append({"title": clean_title(course_title), "href": href})
@@ -127,7 +127,7 @@ async def parse_courses(
                 lesson_title = clean_title(lesson_title)
 
                 link_el = await lesson.query_selector("a")
-                lesson_href: str = await link_el.get_attribute("href") if link_el else "#"
+                lesson_href = (await link_el.get_attribute("href") if link_el else None) or "#"
                 lesson_href = urljoin(playlist_url, lesson_href)
 
                 print(f"   [LESSON] {lesson_title}")
@@ -146,31 +146,34 @@ async def parse_courses(
     if lessons:
         print("   → Найдены уроки на текущей странице (один курс)")
         course_title_el = await page.query_selector("h1")
-        course_title: str = await course_title_el.inner_text() if course_title_el else "Курс"
-        course_title = clean_title(course_title)
+        single_course_title = await course_title_el.inner_text() if course_title_el else "Курс"
+        single_course_title = clean_title(single_course_title)
 
-        all_courses: list[dict] = [{
-            "course_title": course_title,
-            "lessons": [],
-        }]
+        lesson_items: list[dict[str, str]] = []
+        single_courses: list[dict[str, object]] = [
+            {
+                "course_title": single_course_title,
+                "lessons": lesson_items,
+            }
+        ]
 
         for lesson in lessons:
             title_el = await lesson.query_selector("div.link.title")
-            lesson_title: str = await title_el.inner_text() if title_el else "Без названия"
-            lesson_title = clean_title(lesson_title)
+            single_lesson_title = await title_el.inner_text() if title_el else "Без названия"
+            single_lesson_title = clean_title(single_lesson_title)
 
             link_el = await lesson.query_selector("a")
-            lesson_href: str = await link_el.get_attribute("href") if link_el else "#"
-            lesson_href = urljoin(playlist_url, lesson_href)
+            single_lesson_href = (await link_el.get_attribute("href") if link_el else None) or "#"
+            single_lesson_href = urljoin(playlist_url, single_lesson_href)
 
-            print(f"   [LESSON] {lesson_title}")
-            all_courses[0]["lessons"].append({"title": lesson_title, "url": lesson_href})
+            print(f"   [LESSON] {single_lesson_title}")
+            lesson_items.append({"title": single_lesson_title, "url": single_lesson_href})
 
         if on_course_parsed:
-            await on_course_parsed(course_title, len(all_courses[0]["lessons"]))
+            await on_course_parsed(single_course_title, len(lesson_items))
 
         await browser.close()
-        return all_courses
+        return single_courses
 
     print("   ⚠ Не удалось найти курсы или уроки на странице.")
     await browser.close()
