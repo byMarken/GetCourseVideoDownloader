@@ -18,7 +18,7 @@
   <img src="./picture/info-gif.gif" width="720"/>
 </p>
 
----
+
 
 ## Как скачать
 
