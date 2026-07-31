@@ -2,10 +2,9 @@ import asyncio
 
 import flet as ft
 
-from app.screens.start_screen import StartScreen
 from app.screens.courses_screen import CoursesScreen
+from app.screens.start_screen import StartScreen
 from app.theme import Color, build_theme
-
 
 _START_WIN_W, _START_WIN_H = 680, 460
 _COURSES_WIN_W, _COURSES_WIN_H = 1400, 850
@@ -14,6 +13,7 @@ _COURSES_WIN_W, _COURSES_WIN_H = 1400, 850
 class App:
     def __init__(self, page: ft.Page):
         self.page = page
+        self._nav_task: asyncio.Task | None = None
         page.title = "GetCourse Video Downloader"
         page.dark_theme = build_theme()
         page.theme_mode = ft.ThemeMode.DARK
@@ -50,7 +50,7 @@ class App:
         self.page.update()
 
     def navigate_to_start(self):
-        asyncio.create_task(self._show_screen())
+        self._nav_task = asyncio.create_task(self._show_screen())
 
 
 async def main(page: ft.Page):

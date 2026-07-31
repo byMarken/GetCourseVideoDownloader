@@ -1,3 +1,4 @@
+import contextlib
 import io
 import sys
 
@@ -8,10 +9,8 @@ def configure_console_output() -> None:
         if stream is None:
             continue
         if hasattr(stream, "reconfigure"):
-            try:
+            with contextlib.suppress(Exception):
                 stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
         elif not sys.getdefaultencoding().lower().startswith("utf"):
             buffer = getattr(stream, "buffer", None)
             if buffer is not None:

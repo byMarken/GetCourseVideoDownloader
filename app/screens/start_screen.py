@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import json
+from typing import ClassVar
 
 import flet as ft
 from playwright.async_api import async_playwright
@@ -14,11 +16,10 @@ _DATA_PATH = data_dir() / "courses.json"
 
 
 class StartScreen:
-
-    _DECO_CIRCLES = [
-        dict(left=-80, top=-60, size=300, color="rgba(124,58,237,0.10)"),
-        dict(right=-120, bottom=-80, size=380, color="rgba(236,72,153,0.06)"),
-        dict(left=140, bottom=30, size=150, color="rgba(16,185,129,0.05)"),
+    _DECO_CIRCLES: ClassVar[list[dict[str, int | str]]] = [
+        {"left": -80, "top": -60, "size": 300, "color": "rgba(124,58,237,0.10)"},
+        {"right": -120, "bottom": -80, "size": 380, "color": "rgba(236,72,153,0.06)"},
+        {"left": 140, "bottom": 30, "size": 150, "color": "rgba(16,185,129,0.05)"},
     ]
 
     def __init__(self, page: ft.Page):
@@ -127,12 +128,15 @@ class StartScreen:
                         spacing=6,
                         controls=[
                             ft.Text(
-                                f"{i+1}.", size=12,
+                                f"{i + 1}.",
+                                size=12,
                                 color=Color.ACCENT_LIGHT,
                                 weight=ft.FontWeight.W_600,
                             ),
                             ft.Text(
-                                step, size=12, color=Color.TEXT_SECONDARY,
+                                step,
+                                size=12,
+                                color=Color.TEXT_SECONDARY,
                             ),
                         ],
                     )
@@ -462,9 +466,7 @@ class StartScreen:
     def _start_text_animation(self, target: ft.Text, base_text: str) -> None:
         if self._loading_task is not None:
             self._loading_task.cancel()
-        self._loading_task = asyncio.create_task(
-            self._animate_text(target, base_text)
-        )
+        self._loading_task = asyncio.create_task(self._animate_text(target, base_text))
 
     def _start_dot_animation(self) -> None:
         if self._dot_task is not None:
@@ -482,10 +484,8 @@ class StartScreen:
                 await asyncio.sleep(0.45)
         except asyncio.CancelledError:
             self._dot_animation.value = ""
-            try:
+            with contextlib.suppress(Exception):
                 self.page.update()
-            except Exception:
-                pass
             raise
 
     async def _animate_text(self, target: ft.Text, base_text: str) -> None:
@@ -499,10 +499,8 @@ class StartScreen:
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             target.value = base_text
-            try:
+            with contextlib.suppress(Exception):
                 self.page.update()
-            except Exception:
-                pass
             raise
 
     def _start_parse(self):
@@ -582,14 +580,10 @@ class StartScreen:
                                 "Вход ещё не выполнен.\nПожалуйста, войдите в браузере."
                             )
                         except Exception:
-                            self._show_auth_error(
-                                "Ошибка проверки.\nПопробуйте ещё раз."
-                            )
+                            self._show_auth_error("Ошибка проверки.\nПопробуйте ещё раз.")
                         finally:
-                            try:
+                            with contextlib.suppress(Exception):
                                 await check_page.close()
-                            except Exception:
-                                pass
 
                         self._start_text_animation(self._auth_status, "Ожидаем вход")
                         self.page.update()
@@ -603,7 +597,8 @@ class StartScreen:
                 self.page.update()
 
                 courses = await parse_courses(
-                    p, url,
+                    p,
+                    url,
                     on_course_parsed=self._on_course_parsed,
                 )
                 self._stop_all_animations()
@@ -632,7 +627,7 @@ class StartScreen:
             self._show_error(str(ex))
 
     def _show_error(self, message: str):
-        self.page.snack_bar = ft.SnackBar(
+        self.page.snack_bar = ft.SnackBar(  # type: ignore[attr-defined]
             content=ft.Row(
                 [
                     ft.Icon(ft.Icons.ERROR_OUTLINE, color=Color.RED, size=20),
@@ -647,5 +642,5 @@ class StartScreen:
             behavior=ft.SnackBarBehavior.FLOATING,
             elevation=10,
         )
-        self.page.snack_bar.open = True
+        self.page.snack_bar.open = True  # type: ignore[attr-defined]
         self.page.update()

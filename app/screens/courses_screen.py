@@ -1,7 +1,10 @@
 import asyncio
+import contextlib
 import json
 import threading
+from functools import partial
 from pathlib import Path
+from typing import cast
 
 import flet as ft
 
@@ -24,7 +27,6 @@ _COURSE_COLORS = [
 
 
 class CoursesScreen:
-
     @staticmethod
     def has_courses() -> bool:
         file = _COURSES_PATH
@@ -39,8 +41,9 @@ class CoursesScreen:
     def __init__(self, page: ft.Page):
         self.page = page
         self._downloading = False
+        self._scroll_task: asyncio.Task | None = None
 
-        with open(_COURSES_PATH, "r", encoding="utf-8") as f:
+        with open(_COURSES_PATH, encoding="utf-8") as f:
             self.data: list = json.load(f)
 
         self.expanded_courses: set[int] = set(range(len(self.data)))
@@ -108,18 +111,23 @@ class CoursesScreen:
         )
 
         self._auth_icon = ft.Container(
-            width=38, height=38, border_radius=11,
+            width=38,
+            height=38,
+            border_radius=11,
             gradient=Gradient.ACCENT,
             shadow=Shadow.GLOW_PRIMARY,
             content=ft.Icon(ft.Icons.LOCK_ROUNDED, size=19, color=Color.TEXT),
         )
         self._auth_title = ft.Text(
             "Требуется вход",
-            size=17, weight=ft.FontWeight.W_700, color=Color.TEXT,
+            size=17,
+            weight=ft.FontWeight.W_700,
+            color=Color.TEXT,
         )
         self._auth_desc = ft.Text(
             "Для доступа к материалам необходимо\nвыполнить вход в аккаунт.",
-            size=12, color=Color.TEXT_SECONDARY,
+            size=12,
+            color=Color.TEXT_SECONDARY,
             text_align=ft.TextAlign.CENTER,
         )
         _auth_steps = [
@@ -136,7 +144,12 @@ class CoursesScreen:
                     ft.Row(
                         spacing=6,
                         controls=[
-                            ft.Text(f"{i+1}.", size=12, color=Color.ACCENT_LIGHT, weight=ft.FontWeight.W_600),
+                            ft.Text(
+                                f"{i + 1}.",
+                                size=12,
+                                color=Color.ACCENT_LIGHT,
+                                weight=ft.FontWeight.W_600,
+                            ),
                             ft.Text(step, size=12, color=Color.TEXT_SECONDARY),
                         ],
                     )
@@ -146,7 +159,8 @@ class CoursesScreen:
         )
         self._auth_status = ft.Text(
             "Ожидаем вход в браузере...",
-            size=13, color=Color.ACCENT_LIGHT,
+            size=13,
+            color=Color.ACCENT_LIGHT,
             weight=ft.FontWeight.W_500,
             text_align=ft.TextAlign.CENTER,
             height=20,
@@ -233,7 +247,11 @@ class CoursesScreen:
                                             alignment=ft.MainAxisAlignment.END,
                                             controls=[
                                                 ft.Container(
-                                                    content=ft.Icon(ft.Icons.CLOSE, size=20, color=Color.TEXT_SECONDARY),
+                                                    content=ft.Icon(
+                                                        ft.Icons.CLOSE,
+                                                        size=20,
+                                                        color=Color.TEXT_SECONDARY,
+                                                    ),
                                                     padding=ft.Padding.all(4),
                                                     border_radius=6,
                                                     ink=True,
@@ -256,8 +274,15 @@ class CoursesScreen:
                                             text_align=ft.TextAlign.CENTER,
                                         ),
                                         ft.Container(
-                                            content=ft.Text("Выбрать другую папку", size=15, weight=ft.FontWeight.W_600, color=Color.TEXT),
-                                            padding=ft.Padding.symmetric(horizontal=24, vertical=12),
+                                            content=ft.Text(
+                                                "Выбрать другую папку",
+                                                size=15,
+                                                weight=ft.FontWeight.W_600,
+                                                color=Color.TEXT,
+                                            ),
+                                            padding=ft.Padding.symmetric(
+                                                horizontal=24, vertical=12
+                                            ),
                                             border_radius=10,
                                             gradient=Gradient.ACCENT,
                                             ink=True,
@@ -374,7 +399,11 @@ class CoursesScreen:
                                 ft.Container(
                                     content=ft.Row(
                                         [
-                                            ft.Icon(ft.Icons.FOLDER_OPEN_ROUNDED, size=14, color=Color.ACCENT_LIGHT),
+                                            ft.Icon(
+                                                ft.Icons.FOLDER_OPEN_ROUNDED,
+                                                size=14,
+                                                color=Color.ACCENT_LIGHT,
+                                            ),
                                             ft.Text(
                                                 str(len(self.data)),
                                                 size=13,
@@ -458,7 +487,7 @@ class CoursesScreen:
         self.lesson_refs[idx] = lesson_checks
         self._register.extend(lesson_checks)
 
-        lesson_list = ft.Column(spacing=2, controls=lesson_checks)
+        lesson_list = ft.Column(spacing=2, controls=cast(list[ft.Control], lesson_checks))
         body = lesson_list if is_expanded else ft.Container(height=0)
 
         selected_count = sum(1 for c in lesson_checks if c.value)
@@ -560,14 +589,10 @@ class CoursesScreen:
         for idx, course in enumerate(self.data):
             lessons = course.get("lessons", [])
             refs = self.lesson_refs.get(idx, [])
-            course_matches = any(
-                query in lesson.get("title", "").lower() for lesson in lessons
-            )
+            course_matches = any(query in lesson.get("title", "").lower() for lesson in lessons)
             card = self.course_list.controls[idx] if idx < len(self.course_list.controls) else None
             if card:
-                card.visible = course_matches or any(
-                    query in cb.label.lower() for cb in refs
-                )
+                card.visible = course_matches or any(query in cb.label.lower() for cb in refs)
             for cb in refs:
                 cb.visible = cb.label and query in cb.label.lower()
         self.page.update()
@@ -760,8 +785,17 @@ class CoursesScreen:
                                     ft.Container(
                                         content=ft.Row(
                                             [
-                                                ft.Icon(ft.Icons.SELECT_ALL_ROUNDED, size=18, color=Color.TEXT_SECONDARY),
-                                                ft.Text("Выбрать все", size=14, weight=ft.FontWeight.W_500, color=Color.TEXT),
+                                                ft.Icon(
+                                                    ft.Icons.SELECT_ALL_ROUNDED,
+                                                    size=18,
+                                                    color=Color.TEXT_SECONDARY,
+                                                ),
+                                                ft.Text(
+                                                    "Выбрать все",
+                                                    size=14,
+                                                    weight=ft.FontWeight.W_500,
+                                                    color=Color.TEXT,
+                                                ),
                                             ],
                                             spacing=6,
                                             alignment=ft.MainAxisAlignment.CENTER,
@@ -777,8 +811,17 @@ class CoursesScreen:
                                     ft.Container(
                                         content=ft.Row(
                                             [
-                                                ft.Icon(ft.Icons.DESELECT_ROUNDED, size=18, color=Color.TEXT_SECONDARY),
-                                                ft.Text("Убрать все", size=14, weight=ft.FontWeight.W_500, color=Color.TEXT),
+                                                ft.Icon(
+                                                    ft.Icons.DESELECT_ROUNDED,
+                                                    size=18,
+                                                    color=Color.TEXT_SECONDARY,
+                                                ),
+                                                ft.Text(
+                                                    "Убрать все",
+                                                    size=14,
+                                                    weight=ft.FontWeight.W_500,
+                                                    color=Color.TEXT,
+                                                ),
                                             ],
                                             spacing=6,
                                             alignment=ft.MainAxisAlignment.CENTER,
@@ -834,7 +877,8 @@ class CoursesScreen:
         try:
             with open(_SETTINGS_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("save_path", "downloads")
+                save_path = data.get("save_path", "downloads")
+                return save_path if isinstance(save_path, str) else "downloads"
         except (FileNotFoundError, json.JSONDecodeError):
             return "downloads"
 
@@ -851,6 +895,7 @@ class CoursesScreen:
         self.page.window.width = 680
         self.page.window.height = 460
         from app.screens.start_screen import StartScreen
+
         screen = StartScreen(self.page)
         self.page.add(screen.view)
         await self.page.window.center()
@@ -907,7 +952,7 @@ class CoursesScreen:
     def _log_color(line: str) -> str:
         if "Сегменты" in line or "сегмент" in line.lower():
             return "#F59E0B"
-        if line.startswith("✅") or line.startswith("✓"):
+        if line.startswith(("✅", "✓")):
             return Color.GREEN
         if line.startswith("❌") or "Ошибка" in line:
             return Color.RED
@@ -916,7 +961,7 @@ class CoursesScreen:
     def _scroll_smooth(self):
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(
+            self._scroll_task = loop.create_task(
                 self._log_column.scroll_to(
                     delta=1000000,
                     duration=250,
@@ -929,9 +974,7 @@ class CoursesScreen:
     def _add_log(self, line: str):
         self.log_lines.append(line)
         color = self._log_color(line)
-        self._log_column.controls.append(
-            ft.Text(line, size=13, color=color, selectable=False)
-        )
+        self._log_column.controls.append(ft.Text(line, size=13, color=color, selectable=False))
         try:
             self.page.update()
             self._scroll_smooth()
@@ -1015,10 +1058,8 @@ class CoursesScreen:
 
             self._auth_status.value = "Войдите в аккаунт в браузере"
             self._continue_btn.visible = True
-            try:
+            with contextlib.suppress(Exception):
                 self.page.update()
-            except Exception:
-                pass
         except asyncio.CancelledError:
             pass
 
@@ -1026,7 +1067,7 @@ class CoursesScreen:
         self._continue_btn.visible = False
         self._switch_overlay_to_download()
         self.page.update()
-        if hasattr(self, '_proc_stdin') and self._proc_stdin:
+        if hasattr(self, "_proc_stdin") and self._proc_stdin:
             try:
                 self._proc_stdin.write("\n")
                 self._proc_stdin.flush()
@@ -1071,10 +1112,12 @@ class CoursesScreen:
             refs = self.lesson_refs.get(idx, [])
             for i, cb in enumerate(refs):
                 if cb.value and i < len(course["lessons"]):
-                    lessons_to_download.append({
-                        "course_title": course["course_title"],
-                        "lesson": course["lessons"][i],
-                    })
+                    lessons_to_download.append(
+                        {
+                            "course_title": course["course_title"],
+                            "lesson": course["lessons"][i],
+                        }
+                    )
 
         threading.Thread(
             target=self._run_download,
@@ -1090,9 +1133,11 @@ class CoursesScreen:
         import tempfile
 
         page = self.page
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
-        json.dump(lessons, tmp, ensure_ascii=False)
-        tmp.close()
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as tmp:
+            json.dump(lessons, tmp, ensure_ascii=False)
+            lessons_file = tmp.name
         try:
             if getattr(sys, "frozen", False):
                 entry = [sys.executable]
@@ -1103,11 +1148,15 @@ class CoursesScreen:
                 ]
             print(f"▶ Запуск воркера: {entry} --download-worker")
             proc = subprocess.Popen(
-                entry + [
+                [
+                    *entry,
                     "--download-worker",
-                    "--quality", self._quality,
-                    "--save-path", self._save_path,
-                    "--lessons-file", tmp.name,
+                    "--quality",
+                    self._quality,
+                    "--save-path",
+                    self._save_path,
+                    "--lessons-file",
+                    lessons_file,
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -1137,9 +1186,9 @@ class CoursesScreen:
                     parts = line.split("\r")
                     clean = parts[-1].strip()
                     if clean:
-                        page.run_thread(lambda l=clean: self._update_last_log(l))
+                        page.run_thread(partial(self._update_last_log, clean))
                 else:
-                    page.run_thread(lambda l=line: self._add_log(l))
+                    page.run_thread(partial(self._add_log, line))
 
                 if "нажмите enter" in check and "выполнен" not in check:
                     page.run_thread(lambda: self._show_continue_btn())
@@ -1153,9 +1202,7 @@ class CoursesScreen:
                 page.run_thread(lambda: self._finish_download("Загрузка завершена"))
             elif proc.returncode == 2:
                 message = download_issue or "Не удалось скачать все выбранные уроки"
-                page.run_thread(
-                    lambda: self._finish_download(message, is_warning=True)
-                )
+                page.run_thread(lambda: self._finish_download(message, is_warning=True))
             else:
                 err = f"Код ошибки: {proc.returncode}"
                 print(f"❌ {err}")
@@ -1166,14 +1213,10 @@ class CoursesScreen:
             page.run_thread(lambda: self._finish_download(f"Ошибка: {err}", is_error=True))
         finally:
             self._proc_stdin = None
-            try:
-                os.unlink(tmp.name)
-            except Exception:
-                pass
+            with contextlib.suppress(OSError):
+                os.unlink(lessons_file)
 
-    def _finish_download(
-        self, message: str, is_error: bool = False, is_warning: bool = False
-    ):
+    def _finish_download(self, message: str, is_error: bool = False, is_warning: bool = False):
         self._downloading = False
         self._show_completion_overlay(message, is_error, is_warning)
 
@@ -1233,7 +1276,7 @@ class CoursesScreen:
 
         close_container.on_hover = _on_close_hover
 
-        controls = [
+        controls: list[ft.Control] = [
             ft.Container(
                 margin=ft.Margin.only(right=-5, top=-5),
                 content=ft.Row(
@@ -1243,7 +1286,8 @@ class CoursesScreen:
             ),
             ft.Container(height=12),
             ft.Container(
-                width=64, height=64,
+                width=64,
+                height=64,
                 border_radius=32,
                 bgcolor=ft.Colors.with_opacity(0.15, icon_color),
                 content=ft.Icon(icon_name, size=36, color=icon_color),
@@ -1350,9 +1394,12 @@ class CoursesScreen:
         icon = ft.Icons.ERROR_OUTLINE if is_error else ft.Icons.CHECK_CIRCLE_OUTLINE
         icon_color = Color.RED if is_error else Color.GREEN
 
-        self.page.snack_bar = ft.SnackBar(
+        self.page.snack_bar = ft.SnackBar(  # type: ignore[attr-defined]
             content=ft.Row(
-                [ft.Icon(icon, color=icon_color, size=18), ft.Text(message, color=Color.TEXT, size=13, expand=True)],
+                [
+                    ft.Icon(icon, color=icon_color, size=18),
+                    ft.Text(message, color=Color.TEXT, size=13, expand=True),
+                ],
                 spacing=6,
             ),
             bgcolor=bg,
@@ -1362,5 +1409,5 @@ class CoursesScreen:
             behavior=ft.SnackBarBehavior.FLOATING,
             elevation=8,
         )
-        self.page.snack_bar.open = True
+        self.page.snack_bar.open = True  # type: ignore[attr-defined]
         self.page.update()
