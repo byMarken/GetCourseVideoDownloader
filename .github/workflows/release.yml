@@ -1,0 +1,85 @@
+name: Build Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r req.txt pyinstaller
+
+      - name: Install Playwright Firefox
+        run: python -m playwright install firefox
+
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path resources | Out-Null
+          curl.exe -L -o "$env:TEMP\ffmpeg-release-essentials.zip" "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Expand-Archive "$env:TEMP\ffmpeg-release-essentials.zip" "$env:TEMP\ffmpeg-build" -Force
+          $ff = Get-ChildItem "$env:TEMP\ffmpeg-build" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $ff.FullName "resources\ffmpeg.exe" -Force
+
+      - name: Copy Playwright browsers to resources
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "resources\ms-playwright" | Out-Null
+          Get-ChildItem "$env:LOCALAPPDATA\ms-playwright" -Directory -Filter "firefox-*" | ForEach-Object {
+            Copy-Item $_.FullName "resources\ms-playwright" -Recurse -Force
+          }
+
+      - name: Build with flet pack
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $Version = "${{ github.ref_name }}".TrimStart('v')
+          } else {
+            $Version = "0.0.0"
+          }
+          if (-not $Version) { $Version = "0.0.0" }
+          $VerParts = (($Version -split '\.') + @('0','0','0','0'))[0..3]
+          $FileVersion = $VerParts -join '.'
+          flet pack main.py -y -D -n GetCourseVideoDownloader `
+            --product-name "GetCourse Video Downloader" `
+            --file-description "Загрузка видео с GetCourse" `
+            --company-name "Mark Pekun" `
+            --product-version $Version `
+            --file-version $FileVersion
+
+      - name: Copy resources into bundle
+        shell: pwsh
+        run: Copy-Item resources "dist\GetCourseVideoDownloader\resources" -Recurse -Force
+
+      - name: Create release archive
+        shell: pwsh
+        run: Compress-Archive -Path "dist\GetCourseVideoDownloader" -DestinationPath "dist\GetCourseVideoDownloader-win-x64.zip" -CompressionLevel Optimal -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GetCourseVideoDownloader-win-x64
+          path: dist/GetCourseVideoDownloader-win-x64.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/GetCourseVideoDownloader-win-x64.zip

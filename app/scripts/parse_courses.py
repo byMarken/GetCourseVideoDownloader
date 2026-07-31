@@ -17,10 +17,9 @@ if _PROJECT_ROOT not in sys.path:
 
 from app.utils.browser import launch_browser
 from app.utils.console import configure_console_output
+from app.utils.paths import data_dir
 
-
-_PRJ = Path(__file__).resolve().parent.parent.parent
-_OUTPUT_DIR = _PRJ / "app" / "data"
+_OUTPUT_DIR = data_dir()
 _OUTPUT_FILE = str(_OUTPUT_DIR / "courses.json")
 LESSON_LIST_TIMEOUT: float = 5_000.0
 

@@ -6,10 +6,10 @@ from pathlib import Path
 import flet as ft
 
 from app.theme import Color, Gradient, Shadow, accent_button, body_text, divider
+from app.utils.paths import data_dir
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_COURSES_PATH = _PROJECT_ROOT / "app" / "data" / "courses.json"
-_SETTINGS_PATH = _PROJECT_ROOT / "app" / "data" / "settings.json"
+_COURSES_PATH = data_dir() / "courses.json"
+_SETTINGS_PATH = data_dir() / "settings.json"
 
 _COURSE_COLORS = [
     "#7C3AED",
@@ -1090,18 +1090,21 @@ class CoursesScreen:
         import tempfile
 
         page = self.page
-        givereq_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            os.pardir, "services", "givereq.py",
-        )
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
         json.dump(lessons, tmp, ensure_ascii=False)
         tmp.close()
         try:
-            print(f"▶ Запуск: {sys.executable} {givereq_path}")
+            if getattr(sys, "frozen", False):
+                entry = [sys.executable]
+            else:
+                entry = [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent.parent.parent / "main.py"),
+                ]
+            print(f"▶ Запуск воркера: {entry} --download-worker")
             proc = subprocess.Popen(
-                [
-                    sys.executable, givereq_path,
+                entry + [
+                    "--download-worker",
                     "--quality", self._quality,
                     "--save-path", self._save_path,
                     "--lessons-file", tmp.name,
@@ -1192,7 +1195,6 @@ class CoursesScreen:
                 "Загружено",
             )
 
-        # --- Close button (X) with hover effects ---
         close_button = ft.IconButton(
             icon=ft.Icons.CLOSE,
             icon_size=20,
@@ -1231,9 +1233,7 @@ class CoursesScreen:
 
         close_container.on_hover = _on_close_hover
 
-        # --- Build controls ---
         controls = [
-            # Close button row — shifted right and up to sit ~19 px from card corner
             ft.Container(
                 margin=ft.Margin.only(right=-5, top=-5),
                 content=ft.Row(
@@ -1242,7 +1242,6 @@ class CoursesScreen:
                 ),
             ),
             ft.Container(height=12),
-            # Checkmark icon
             ft.Container(
                 width=64, height=64,
                 border_radius=32,
@@ -1250,7 +1249,6 @@ class CoursesScreen:
                 content=ft.Icon(icon_name, size=36, color=icon_color),
             ),
             ft.Container(height=18),
-            # Title
             ft.Text(
                 title,
                 size=22,
@@ -1259,7 +1257,6 @@ class CoursesScreen:
                 text_align=ft.TextAlign.CENTER,
             ),
             ft.Container(height=8),
-            # Message
             ft.Text(
                 message,
                 size=14,
@@ -1269,7 +1266,6 @@ class CoursesScreen:
         ]
 
         if not is_error and not is_warning:
-            # --- Horizontal divider ---
             controls.append(ft.Container(height=18))
             controls.append(
                 ft.Container(
@@ -1278,10 +1274,8 @@ class CoursesScreen:
                     bgcolor="rgba(255,255,255,0.07)",
                 ),
             )
-            # Keep the support action visually separate from the completion message.
             controls.append(ft.Container(height=96))
 
-            # --- Support text: one line, no star icon, secondary style ---
             controls.append(
                 ft.Text(
                     "Сэкономил время? Поддержи проект",
@@ -1293,7 +1287,6 @@ class CoursesScreen:
             )
             controls.append(ft.Container(height=20))
 
-            # --- Star button: full width of content area ---
             star_btn = ft.Container(
                 content=ft.Row(
                     alignment=ft.MainAxisAlignment.CENTER,

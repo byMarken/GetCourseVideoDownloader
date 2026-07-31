@@ -1,10 +1,8 @@
 import json
-import subprocess
-import sys
-from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-COURSES_FILE = _PROJECT_ROOT / "app" / "data" / "courses.json"
+from app.utils.paths import data_dir
+
+COURSES_FILE = data_dir() / "courses.json"
 
 
 def has_courses() -> bool:
@@ -18,6 +16,9 @@ def has_courses() -> bool:
 
 
 def run_parser(url: str) -> None:
+    import subprocess
+    import sys
+
     subprocess.run(
         [sys.executable, "app/scripts/parse_courses.py", url],
         check=True,
