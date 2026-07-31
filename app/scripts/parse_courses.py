@@ -6,6 +6,7 @@ import json
 import re
 import sys
 from collections.abc import Awaitable, Callable
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -34,6 +35,59 @@ def clean_title(title: str) -> str:
         flags=re.IGNORECASE,
     )
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+class _FragmentParser(HTMLParser):
+    """Извлекает текст первого элемента (tag, class) и первый href из фрагмента HTML."""
+
+    def __init__(self, tag: str, class_name: str) -> None:
+        super().__init__()
+        self._tag = tag
+        self._class_names = set(class_name.split())
+        self._depth = 0
+        self._collecting = False
+        self._parts: list[str] = []
+        self.href: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = dict(attrs)
+        if tag == "a" and self.href is None:
+            self.href = attr_map.get("href")
+        classes = set((attr_map.get("class") or "").split())
+        if tag == self._tag and self._class_names.issubset(classes):
+            self._collecting = True
+            self._depth = 1
+        elif self._collecting:
+            self._depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._collecting:
+            self._depth -= 1
+            if self._depth == 0:
+                self._collecting = False
+
+    def handle_data(self, data: str) -> None:
+        if self._collecting:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        return "".join(self._parts).strip()
+
+
+def parse_course_row(html: str) -> tuple[str, str]:
+    """Извлекает (название, href) из HTML строки `tr.training-row`."""
+    parser = _FragmentParser("span", "stream-title")
+    parser.feed(html)
+    title = parser.text() or "Без названия"
+    return clean_title(title), parser.href or "#"
+
+
+def parse_lesson_item(html: str) -> tuple[str, str]:
+    """Извлекает (название, url) из HTML элемента `ul.lesson-list li`."""
+    parser = _FragmentParser("div", "link title")
+    parser.feed(html)
+    title = parser.text() or "Без названия"
+    return clean_title(title), parser.href or "#"
 
 
 async def ensure_authenticated(
@@ -100,14 +154,9 @@ async def parse_courses(
     if rows:
         courses: list[dict[str, str]] = []
         for row in rows:
-            title_el = await row.query_selector("span.stream-title")
-            course_title: str = await title_el.inner_text() if title_el else "Без названия"
-
-            link_el = await row.query_selector("a")
-            href = (await link_el.get_attribute("href") if link_el else None) or "#"
+            course_title, href = parse_course_row(await row.inner_html())
             href = urljoin(playlist_url, href)
-
-            courses.append({"title": clean_title(course_title), "href": href})
+            courses.append({"title": course_title, "href": href})
 
         all_courses = []
         for course in courses:
@@ -122,14 +171,8 @@ async def parse_courses(
 
             lessons_data = []
             for lesson in lesson_elements:
-                title_el = await lesson.query_selector("div.link.title")
-                lesson_title: str = await title_el.inner_text() if title_el else "Без названия"
-                lesson_title = clean_title(lesson_title)
-
-                link_el = await lesson.query_selector("a")
-                lesson_href = (await link_el.get_attribute("href") if link_el else None) or "#"
+                lesson_title, lesson_href = parse_lesson_item(await lesson.inner_html())
                 lesson_href = urljoin(playlist_url, lesson_href)
-
                 print(f"   [LESSON] {lesson_title}")
                 lessons_data.append({"title": lesson_title, "url": lesson_href})
 
@@ -158,14 +201,8 @@ async def parse_courses(
         ]
 
         for lesson in lessons:
-            title_el = await lesson.query_selector("div.link.title")
-            single_lesson_title = await title_el.inner_text() if title_el else "Без названия"
-            single_lesson_title = clean_title(single_lesson_title)
-
-            link_el = await lesson.query_selector("a")
-            single_lesson_href = (await link_el.get_attribute("href") if link_el else None) or "#"
+            single_lesson_title, single_lesson_href = parse_lesson_item(await lesson.inner_html())
             single_lesson_href = urljoin(playlist_url, single_lesson_href)
-
             print(f"   [LESSON] {single_lesson_title}")
             lesson_items.append({"title": single_lesson_title, "url": single_lesson_href})
 

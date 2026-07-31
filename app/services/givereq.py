@@ -437,6 +437,7 @@ async def main() -> int:
         )
 
         downloaded_lessons = 0
+        failed_lessons: list[str] = []
         for entry in entries:
             course_title = entry["course_title"]
             lesson = entry["lesson"]
@@ -448,11 +449,21 @@ async def main() -> int:
                 quality_setting,
                 playwright=playwright,
             )
-            downloaded_lessons += int(downloaded)
+            if downloaded:
+                downloaded_lessons += 1
+            else:
+                failed_lessons.append(str(lesson.get("title", "?")))
 
         await browser.close()
 
-    if downloaded_lessons == len(entries):
+    total = len(entries)
+    print(f"\n[SUMMARY] Загружено: {downloaded_lessons} из {total}")
+    if failed_lessons:
+        print(f"[SUMMARY] Не удалось: {len(failed_lessons)}")
+        for title in failed_lessons:
+            print(f"[SUMMARY]   ✗ {title}")
+
+    if downloaded_lessons == total:
         return 0
 
     return 2

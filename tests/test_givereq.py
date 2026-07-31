@@ -73,3 +73,36 @@ def test_select_quality_falls_back_to_lowest():
 
 def test_select_quality_empty():
     assert _select_quality_url({}, "720") is None
+
+
+def test_extract_quality_ignores_query_string():
+    assert _extract_quality("https://example.com/video/720/index.m3u8?token=abc") == 720
+
+
+def test_extract_quality_ignores_query_numbers():
+    assert _extract_quality("https://example.com/index.m3u8?quality=1080") == 0
+
+
+def test_parse_master_playlist_absolute_urls():
+    playlist = (
+        "#EXTM3U\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\n"
+        "https://cdn.example.com/720/index.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n"
+        "https://cdn.example.com/1080/index.m3u8\n"
+    )
+    qualities = _parse_master_playlist(playlist, "https://example.com/master.m3u8")
+    assert qualities == {
+        720: "https://cdn.example.com/720/index.m3u8",
+        1080: "https://cdn.example.com/1080/index.m3u8",
+    }
+
+
+def test_parse_master_playlist_uses_url_quality_without_resolution():
+    playlist = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000\n480/index.m3u8\n"
+    qualities = _parse_master_playlist(playlist, "https://example.com/master.m3u8")
+    assert qualities == {480: "https://example.com/480/index.m3u8"}
+
+
+def test_parse_master_playlist_empty():
+    assert _parse_master_playlist("", "https://example.com/master.m3u8") == {}
