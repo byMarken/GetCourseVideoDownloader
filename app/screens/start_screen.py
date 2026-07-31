@@ -1,6 +1,5 @@
 import asyncio
 import json
-from pathlib import Path
 
 import flet as ft
 from playwright.async_api import async_playwright
@@ -9,9 +8,9 @@ from app.screens.courses_screen import CoursesScreen
 from app.scripts.parse_courses import parse_courses
 from app.theme import Color, Gradient, Shadow, accent_button, body_text, divider
 from app.utils.browser import launch_browser
+from app.utils.paths import data_dir
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_DATA_PATH = _PROJECT_ROOT / "app" / "data" / "courses.json"
+_DATA_PATH = data_dir() / "courses.json"
 
 
 class StartScreen:

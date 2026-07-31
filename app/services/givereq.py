@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from typing import Any
@@ -19,11 +20,12 @@ if _PROJECT_ROOT not in sys.path:
 from app.utils.ffmpeg import get_ffmpeg_path
 from app.utils.browser import launch_browser
 from app.utils.console import configure_console_output
+from app.utils.paths import data_dir
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
-_COURSES_PATH = Path(_PROJECT_ROOT) / "app" / "data" / "courses.json"
+_COURSES_PATH = data_dir() / "courses.json"
 
 configure_console_output()
 
@@ -170,6 +172,9 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
         print(f"\r  Сегментов: {len(segments)}/{total} ({len(segments)*100//total}%)")
 
         ffmpeg_path = get_ffmpeg_path()
+        ffmpeg_flags = 0
+        if os.name == "nt":
+            ffmpeg_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = await asyncio.create_subprocess_exec(
             ffmpeg_path,
             "-y",
@@ -179,6 +184,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
             output_mp4,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=ffmpeg_flags,
         )
         try:
             _, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
@@ -199,13 +205,10 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
 async def _open_page_with_retries(
     page: Any, url: str, attempts: int = 3, purpose: str = "страницу"
 ) -> None:
-    """Open a page reliably when the school responds slowly."""
     last_error: PlaywrightError | None = None
 
     for attempt in range(1, attempts + 1):
         try:
-            # "commit" is enough to detect redirects to the login page and avoids
-            # waiting for all lesson resources before authentication is checked.
             await page.goto(url, wait_until="commit", timeout=60_000)
             return
         except (PlaywrightTimeoutError, PlaywrightError) as error:
@@ -221,12 +224,9 @@ async def _open_page_with_retries(
 
 
 async def _authentication_required(page: Any) -> bool:
-    """Wait briefly for a possible redirect to the school's login page."""
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=10_000)
     except PlaywrightError:
-        # The page may keep loading player resources, but its redirect URL is
-        # already available and is enough for the authentication check.
         pass
 
     await page.wait_for_timeout(500)

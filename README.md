@@ -47,6 +47,8 @@
 
 ## 📋 Требования
 
+> Эти требования нужны только для запуска из исходников. Готовый [exe из Releases](#-готовый-exe-windows) уже включает всё необходимое.
+
 | Компонент | Версия |
 |-----------|--------|
 | **ОС** | Windows 10 / 11 |
@@ -56,7 +58,33 @@
 
 
 
-## 🚀 Установка
+## 📦 Готовый .exe (Windows)
+
+Ничего устанавливать не нужно — Python, FFmpeg и Firefox уже включены в сборку.
+
+1. Перейди в [Releases](https://github.com/markpekun/getcourse-downloader/releases) этого репозитория.
+2. Скачай **`GetCourseVideoDownloader-win-x64.zip`** (последняя версия, тег `v*`).
+3. Распакуй архив в любую папку и запусти **`GetCourseVideoDownloader.exe`**.
+
+> ⚠️ Первый запуск может занять немного времени — приложение распаковывает Flet-клиент (~100 МБ) в `%USERPROFILE%\.flet\client` (один раз).
+
+### 📁 Что где лежит
+
+Рядом с exe при первом запуске создаются рабочие папки:
+
+```
+GetCourseVideoDownloader/
+├── GetCourseVideoDownloader.exe
+├── resources/        # ffmpeg.exe + браузер Firefox (не удаляй!)
+├── data/             # courses.json, settings.json
+└── session_data/     # вход в аккаунт (авторизация)
+```
+
+- При обновлении скачивай новый zip и переноси `data/` и `session_data/` в новую папку, чтобы сохранить курсы и авторизацию.
+- Готовые сборки также лежат в ветке **`release`** репозитория (папка `releases/`).
+- Windows SmartScreen может предупредить о «неизвестном издателе» (exe не подписан). Нажми **«Подробнее» → «Выполнить в любом случае»**.
+
+## 🚀 Установка (из исходников)
 
 ### 1. Клонируй репозиторий
 
@@ -140,8 +168,9 @@ python -m app.main
 
 ```
 GetCourseVideoDownloader/
+├── main.py                      # 🚀 Точка входа (Flet-приложение + режим воркера)
 ├── app/
-│   ├── main.py                  # 🚀 Точка входа (Flet-приложение)
+│   ├── main.py                  # 🖥️ Логика Flet-приложения
 │   ├── theme.py                 # 🎨 Тёмная тема: цвета, градиенты, тени, UI-компоненты
 │   ├── data/
 │   │   ├── courses.json         # 📋 Распарсенные курсы и уроки (создаётся при парсинге)
@@ -154,8 +183,12 @@ GetCourseVideoDownloader/
 │   ├── services/
 │   │   ├── givereq.py           # ⬇️ Скачивание видео (Playwright + aiohttp + ffmpeg)
 │   │   └── parser_service.py    # 🔗 Мост между GUI и parse_courses.py
-│   └── session_data/            # 🍪 Сессия Firefox (persistent context)
-├── app/utils_console.py         # 🛠 Утилита UTF-8 для консоли
+│   └── utils/
+│       ├── paths.py             # 🗺️ Frozen-aware пути (data/, resources/, session_data/)
+│       ├── browser.py           # 🌐 Запуск Firefox (persistent context)
+│       ├── ffmpeg.py            # 🎞️ Поиск ffmpeg (resources/ или PATH)
+│       └── console.py           # 🛠 Утилита UTF-8 для консоли
+├── session_data/                # 🍪 Сессия Firefox (persistent context)
 ├── req.txt                      # 📦 Зависимости
 └── README.md                    # 📖 Этот файл
 ```
@@ -166,7 +199,7 @@ GetCourseVideoDownloader/
 ### 🔄 Как это работает под капотом
 
 1. **Парсинг** — Playwright открывает Firefox (скрытый), заходит по ссылке плейлиста, собирает все курсы и ссылки на уроки → сохраняет в `courses.json`
-2. **Авторизация** — используется Firefox **persistent context** (`app/session_data/`) — куки и localStorage сохраняются между запусками
+2. **Авторизация** — используется Firefox **persistent context** (`session_data/`) — куки и localStorage сохраняются между запусками
 3. **Загрузка** — для каждого урока открывается страница, перехватывается ответ с **m3u8 master-плейлистом**, парсятся доступные качества
 4. **Сегменты** — из выбранного качества читаются `.ts`/`.bin` сегменты и скачиваются **асинхронно** (aiohttp + asyncio.Semaphore)
 5. **Конвертация** — все сегменты склеиваются в `.ts`, затем FFmpeg конвертирует в `.mp4` (codec copy, без пережатия)

@@ -1,23 +1,19 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+from app.utils.paths import resources_dir
 
 
 def get_ffmpeg_path() -> str:
-    bundled = _PROJECT_ROOT / "resources" / "ffmpeg.exe"
+    bundled = resources_dir() / "ffmpeg.exe"
     if bundled.is_file():
         return str(bundled.resolve())
 
-    # 2. System PATH
     system = shutil.which("ffmpeg")
     if system:
         return system
 
-    # 3. Nothing found — raise a clear error
     raise FileNotFoundError(
         "ffmpeg не найден.\n"
         "  • Установите ffmpeg (https://ffmpeg.org/) и добавьте его в PATH\n"

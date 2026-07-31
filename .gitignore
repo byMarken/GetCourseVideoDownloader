@@ -6,3 +6,7 @@ session_data/
 app/session_data
 app/data
 resources
+
+build/
+dist/
+*.spec
