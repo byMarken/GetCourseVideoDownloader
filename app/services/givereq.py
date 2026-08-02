@@ -128,6 +128,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
             print("  ⚠ Нет сегментов")
             return False
 
+        print("  ▶ Скачивание сегментов...")
         tmpdir = tempfile.mkdtemp()
         sem = asyncio.Semaphore(10)
 
@@ -349,6 +350,8 @@ async def process_lesson(
             print("  ⚠ Авторизация не подтверждена")
             await page.close()
             return False
+
+    print("  ⏳ Получение мастер-плейлиста...")
 
     start_time = time.monotonic()
     while True:
