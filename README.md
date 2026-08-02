@@ -21,7 +21,7 @@
 
 ## Как скачать
 
-1. **Скачайте** [GetCourseVideoDownloader-win-x64.zip](https://github.com/markpekun/getcourse-downloader/releases/download/v0.1.0/GetCourseVideoDownloader-win-x64.zip).
+1. **Скачайте** [GetCourseVideoDownloader-win-x64.zip](https://github.com/markpekun/getcourse-downloader/releases/latest/download/GetCourseVideoDownloader-win-x64.zip).
 2. **Распакуйте** архив в любую папку.
 3. **Запустите** `GetCourseVideoDownloader.exe`.
 
