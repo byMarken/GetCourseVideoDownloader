@@ -1000,7 +1000,7 @@ class CoursesScreen:
     def _should_log(self, line: str) -> bool:
         if line.startswith("Старт скачивания"):
             return True
-        if "▶" in line and "Урок" in line:
+        if "▶" in line:
             return True
         return self._is_progress_line(line)
 
@@ -1264,7 +1264,7 @@ class CoursesScreen:
                     if clean:
                         page.run_thread(partial(self._update_last_log, clean))
                 else:
-                    page.run_thread(partial(self._add_log, line))
+                    page.run_thread(partial(self._update_last_log, line))
 
                 if "нажмите enter" in check and "выполнен" not in check:
                     page.run_thread(lambda: self._show_continue_btn())

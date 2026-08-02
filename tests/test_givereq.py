@@ -1,5 +1,6 @@
 from app.services.givereq import (
     _extract_quality,
+    _extract_segment_urls,
     _parse_master_playlist,
     _select_quality_url,
     sanitize_filename,
@@ -106,3 +107,24 @@ def test_parse_master_playlist_uses_url_quality_without_resolution():
 
 def test_parse_master_playlist_empty():
     assert _parse_master_playlist("", "https://example.com/master.m3u8") == {}
+
+
+def test_extract_segment_urls_resolves_relative():
+    playlist = "#EXTM3U\nseg1.ts\nseg2.bin\n#EXTINF:5,\n"
+    urls = _extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
+    assert urls == [
+        "https://cdn.example.com/video/720/seg1.ts",
+        "https://cdn.example.com/video/720/seg2.bin",
+    ]
+
+
+def test_extract_segment_urls_keeps_absolute():
+    playlist = "#EXTM3U\nhttps://cdn.example.com/seg1.bin\n"
+    urls = _extract_segment_urls(playlist, "https://cdn.example.com/video/index.m3u8")
+    assert urls == ["https://cdn.example.com/seg1.bin"]
+
+
+def test_extract_segment_urls_ignores_comments_and_others():
+    playlist = "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6,\nseg1.ts\nhttps://other.example.com/a.m3u8\n"
+    urls = _extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
+    assert urls == ["https://cdn.example.com/video/720/seg1.ts"]
