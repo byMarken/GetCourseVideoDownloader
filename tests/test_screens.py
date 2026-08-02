@@ -44,10 +44,10 @@ def test_parse_summary_all_failed():
 def test_update_download_title_stages():
     cs = CoursesScreen.__new__(CoursesScreen)
     cs._download_title = ft.Text("Подготовка")
-    cs._update_download_title("  ⏳ Получение мастер-плейлиста...")
-    assert cs._download_title.value == "Получение мастер-плейлиста"
-    cs._update_download_title("  📡 Получение мастер-плейлиста")
-    assert cs._download_title.value == "Получение мастер-плейлиста"
+    cs._update_download_title("  ⏳ Получение запроса...")
+    assert cs._download_title.value == "Получение запроса"
+    cs._update_download_title("  📡 Получение запроса")
+    assert cs._download_title.value == "Получение запроса"
     cs._update_download_title("  ▶ Скачивание сегментов...")
     assert cs._download_title.value == "Загрузка видео"
 
@@ -63,7 +63,7 @@ def test_should_log_lessons_and_segments():
 def test_should_log_filters_stage_lines():
     cs = CoursesScreen.__new__(CoursesScreen)
     assert cs._should_log("  ✓ Авторизация активна") is False
-    assert cs._should_log("  ⏳ Получение мастер-плейлиста...") is False
+    assert cs._should_log("  ⏳ Получение запроса...") is False
     assert cs._should_log("  ▶ Скачивание сегментов...") is False
     assert cs._should_log("  ⏳ Конвертация видео...") is False
 
@@ -72,6 +72,13 @@ def test_is_progress_line():
     assert CoursesScreen._is_progress_line("Сегменты: 3/10 (30%)") is True
     assert CoursesScreen._is_progress_line("Сегментов: 10/10 (100%)") is True
     assert CoursesScreen._is_progress_line("▶ Урок 3. Что такое INCI?") is False
+
+
+def test_update_download_title_auth_not_confused_with_request():
+    cs = CoursesScreen.__new__(CoursesScreen)
+    cs._download_title = ft.Text("Подготовка")
+    cs._update_download_title("  ⚠ Страница запросила авторизацию")
+    assert cs._download_title.value == "Проверка авторизации"
 
 
 def test_update_download_title_playlist_not_found():
@@ -86,8 +93,8 @@ def test_update_download_title_page_then_waiting():
     cs._download_title = ft.Text("Подготовка")
     cs._update_download_title("  ▶ Урок 5. Катионные ПАВ")
     assert cs._download_title.value == "Загрузка страницы урока"
-    cs._update_download_title("  ⏳ Получение мастер-плейлиста...")
-    assert cs._download_title.value == "Получение мастер-плейлиста"
+    cs._update_download_title("  ⏳ Получение запроса...")
+    assert cs._download_title.value == "Получение запроса"
 
 
 class _FakePage:
@@ -104,8 +111,8 @@ def test_add_log_updates_page_for_filtered_stage_line():
     cs._download_title = ft.Text("Подготовка")
     cs._log_column = ft.Column(scroll=ft.ScrollMode.AUTO, auto_scroll=True, spacing=1)
     cs.log_lines = []
-    cs._add_log("  ⏳ Получение мастер-плейлиста...")
-    assert cs._download_title.value == "Получение мастер-плейлиста"
+    cs._add_log("  ⏳ Получение запроса...")
+    assert cs._download_title.value == "Получение запроса"
     assert cs.page.updates >= 1
     assert len(cs._log_column.controls) == 0
 
