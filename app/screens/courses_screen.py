@@ -1013,8 +1013,8 @@ class CoursesScreen:
             title = "Загрузка видео"
         elif "не получен" in check:
             title = "Плейлист не найден"
-        elif "плейлист" in check or "playlist" in check:
-            title = "Получение мастер-плейлиста"
+        elif "получение запроса" in check:
+            title = "Получение запроса"
         elif "▶" in line:
             title = "Загрузка страницы урока"
         elif "авторизац" in check:

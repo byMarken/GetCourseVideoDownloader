@@ -133,7 +133,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
         sem = asyncio.Semaphore(10)
 
         downloaded_count = 0
-        last_report_time = 0.0
+        last_report_time = float("-inf")
 
         async def download_seg(idx: int, seg_url: str) -> str | None:
             nonlocal downloaded_count, last_report_time
@@ -293,10 +293,8 @@ async def process_lesson(
 
     master_urls_seen: set[str] = set()
     master_playlists: list[tuple[str, str]] = []
-    last_arrival = 0.0
 
     async def _on_response(response):
-        nonlocal last_arrival
         url = response.url
         if "/api/playlist/master/" not in url or url in master_urls_seen:
             return
@@ -304,7 +302,6 @@ async def process_lesson(
         try:
             text = await response.text()
             master_playlists.append((url, text))
-            last_arrival = time.monotonic()
         except Exception:
             pass
 
@@ -338,7 +335,6 @@ async def process_lesson(
 
         master_urls_seen.clear()
         master_playlists.clear()
-        last_arrival = 0.0
         try:
             await _open_page_with_retries(page, lesson_url, purpose="страницу урока")
         except RuntimeError as error:
@@ -351,49 +347,78 @@ async def process_lesson(
             await page.close()
             return False
 
-    print("  ⏳ Получение мастер-плейлиста...")
+    print("  ⏳ Получение запроса...")
 
+    # Wait for the first master playlist response. The page is kept open while
+    # the first video downloads, so additional master playlists of a multi-part
+    # lesson keep being captured and get processed right after.
     start_time = time.monotonic()
-    while True:
-        if time.monotonic() - start_time >= 30:
-            break
-        if master_playlists and time.monotonic() - last_arrival >= 5:
-            break
+    while not master_playlists and time.monotonic() - start_time < 30:
         await asyncio.sleep(0.5)
 
-    await page.close()
-
     if not master_playlists:
+        await page.close()
         print("  ⚠ Master playlist не получен")
         return False
 
+    course_path = os.path.join(save_root, course_title)
+    os.makedirs(course_path, exist_ok=True)
+    safe_title = sanitize_filename(lesson_title)
+
     downloaded = False
-    for idx, (master_url, master_text) in enumerate(master_playlists, start=1):
-        qualities = _parse_master_playlist(master_text, master_url)
-        selected_url = _select_quality_url(qualities, quality_filter)
+    processed: set[str] = set()
+    video_count = 0
+    saved_single = False
+    idle_since = time.monotonic()
 
-        if not selected_url:
-            print("  ⚠ Не удалось подобрать качество")
-            continue
+    try:
+        while True:
+            pending = [(u, t) for u, t in master_playlists if u not in processed]
+            if not pending:
+                if time.monotonic() - idle_since >= 5:
+                    break
+                await asyncio.sleep(0.5)
+                continue
 
-        course_path = os.path.join(save_root, course_title)
-        os.makedirs(course_path, exist_ok=True)
-        safe_title = sanitize_filename(lesson_title)
+            for master_url, master_text in pending:
+                processed.add(master_url)
+                video_count += 1
+                qualities = _parse_master_playlist(master_text, master_url)
+                selected_url = _select_quality_url(qualities, quality_filter)
 
-        if len(master_playlists) > 1:
+                if not selected_url:
+                    print("  ⚠ Не удалось подобрать качество")
+                    continue
+
+                if len(master_playlists) > 1:
+                    video_dir = os.path.join(course_path, safe_title)
+                    os.makedirs(video_dir, exist_ok=True)
+                    downloaded = (
+                        await _download_video(
+                            selected_url, os.path.join(video_dir, f"video_{video_count}")
+                        )
+                        or downloaded
+                    )
+                else:
+                    saved_single = True
+                    downloaded = (
+                        await _download_video(selected_url, os.path.join(course_path, safe_title))
+                        or downloaded
+                    )
+                print()
+
+            idle_since = time.monotonic()
+    finally:
+        await page.close()
+
+    # If the lesson turned out to have several videos but the first one was saved
+    # as a single file, move it into the shared subfolder for a consistent layout.
+    if saved_single and len(master_playlists) > 1:
+        single_path = os.path.join(course_path, safe_title) + ".mp4"
+        if os.path.exists(single_path):
             video_dir = os.path.join(course_path, safe_title)
             os.makedirs(video_dir, exist_ok=True)
-            downloaded = (
-                await _download_video(selected_url, os.path.join(video_dir, f"video_{idx}"))
-                or downloaded
-            )
-        else:
-            downloaded = (
-                await _download_video(selected_url, os.path.join(course_path, safe_title))
-                or downloaded
-            )
-
-        print()
+            os.replace(single_path, os.path.join(video_dir, "video_1.mp4"))
 
     return downloaded
 
