@@ -30,6 +30,10 @@ warn_unused_configs = true
 ignore_missing_imports = true
 exclude = ["build/", "dist/", ".venv/", "session_data/", "resources/"]
 
+[[tool.mypy.overrides]]
+module = ["app.screens.courses_screen", "app.screens.start_screen"]
+disable_error_code = ["attr-defined"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

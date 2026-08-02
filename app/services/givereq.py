@@ -349,9 +349,6 @@ async def process_lesson(
 
     print("  ⏳ Получение запроса...")
 
-    # Wait for the first master playlist response. The page is kept open while
-    # the first video downloads, so additional master playlists of a multi-part
-    # lesson keep being captured and get processed right after.
     start_time = time.monotonic()
     while not master_playlists and time.monotonic() - start_time < 30:
         await asyncio.sleep(0.5)
@@ -411,8 +408,6 @@ async def process_lesson(
     finally:
         await page.close()
 
-    # If the lesson turned out to have several videos but the first one was saved
-    # as a single file, move it into the shared subfolder for a consistent layout.
     if saved_single and len(master_playlists) > 1:
         single_path = os.path.join(course_path, safe_title) + ".mp4"
         if os.path.exists(single_path):

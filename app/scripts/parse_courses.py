@@ -38,8 +38,6 @@ def clean_title(title: str) -> str:
 
 
 class _FragmentParser(HTMLParser):
-    """Извлекает текст первого элемента (tag, class) и первый href из фрагмента HTML."""
-
     def __init__(self, tag: str, class_name: str) -> None:
         super().__init__()
         self._tag = tag
@@ -75,7 +73,6 @@ class _FragmentParser(HTMLParser):
 
 
 def parse_course_row(html: str) -> tuple[str, str]:
-    """Извлекает (название, href) из HTML строки `tr.training-row`."""
     parser = _FragmentParser("span", "stream-title")
     parser.feed(html)
     title = parser.text() or "Без названия"
@@ -83,7 +80,6 @@ def parse_course_row(html: str) -> tuple[str, str]:
 
 
 def parse_lesson_item(html: str) -> tuple[str, str]:
-    """Извлекает (название, url) из HTML элемента `ul.lesson-list li`."""
     parser = _FragmentParser("div", "link title")
     parser.feed(html)
     title = parser.text() or "Без названия"
