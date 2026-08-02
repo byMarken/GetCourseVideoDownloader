@@ -64,8 +64,14 @@ def test_should_log_filters_stage_lines():
     cs = CoursesScreen.__new__(CoursesScreen)
     assert cs._should_log("  ✓ Авторизация активна") is False
     assert cs._should_log("  ⏳ Получение запроса...") is False
-    assert cs._should_log("  ▶ Скачивание сегментов...") is False
     assert cs._should_log("  ⏳ Конвертация видео...") is False
+
+
+def test_should_log_logs_stage_markers():
+    cs = CoursesScreen.__new__(CoursesScreen)
+    assert cs._should_log("  ▶ Урок 3. Что такое INCI?") is True
+    assert cs._should_log("  ▶ Скачивание сегментов...") is True
+    assert cs._should_log("  ▶ ZOOM от 03.02.2026: Разбор") is True
 
 
 def test_is_progress_line():

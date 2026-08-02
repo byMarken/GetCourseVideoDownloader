@@ -94,6 +94,15 @@ def _select_quality_url(qualities: dict[int, str], quality_filter: str) -> str |
     return qualities[available[0]]
 
 
+def _extract_segment_urls(playlist: str, playlist_url: str) -> list[str]:
+    """Возвращает абсолютные URL сегментов из медиа-плейлиста."""
+    return [
+        urljoin(playlist_url, line.strip())
+        for line in playlist.splitlines()
+        if line.strip() and not line.startswith("#") and (".bin" in line or ".ts" in line)
+    ]
+
+
 async def _countdown(seconds: int, message: str = "Ожидание") -> None:
     for i in range(seconds, 0, -1):
         print(f"\r  ⏳ {message}: {i} сек.", end="", flush=True)
@@ -114,15 +123,27 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
         "Referer": "https://school.beilbei.ru/",
     }
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        async with session.get(playlist_url) as resp:
-            playlist = await resp.text()
+    # aiohttp's default timeout is None, so a CDN connection that stops
+    # responding would block resp.read() forever and freeze the whole download.
+    # Bound every request: sock_read kills a connection that sends no data,
+    # connect/sock_connect bound TCP+TLS handshakes, total is a backstop.
+    timeout = aiohttp.ClientTimeout(
+        total=600,
+        connect=15,
+        sock_connect=15,
+        sock_read=15,
+    )
 
-        segment_urls = [
-            line.strip()
-            for line in playlist.splitlines()
-            if line.strip() and not line.startswith("#") and (".bin" in line or ".ts" in line)
-        ]
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+        try:
+            async with session.get(playlist_url) as resp:
+                resp.raise_for_status()
+                playlist = await resp.text()
+        except Exception as error:
+            print(f"  ⚠ Не удалось получить плейлист: {error}")
+            return False
+
+        segment_urls = _extract_segment_urls(playlist, playlist_url)
         total = len(segment_urls)
         if not total:
             print("  ⚠ Нет сегментов")
@@ -141,6 +162,7 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
                 for attempt in range(3):
                     try:
                         async with session.get(seg_url) as resp:
+                            resp.raise_for_status()
                             data = await resp.read()
                         path = os.path.join(tmpdir, f"{idx:05d}.bin")
                         with open(path, "wb") as f:
@@ -156,6 +178,10 @@ async def _download_video(playlist_url: str, output_path: str) -> bool:
                                 flush=True,
                             )
                         return path
+                    except TimeoutError:
+                        # The connection stopped responding — retrying would just
+                        # add another long freeze, so treat the segment as dead.
+                        return None
                     except Exception:
                         if attempt == 2:
                             return None
@@ -300,7 +326,7 @@ async def process_lesson(
             return
         master_urls_seen.add(url)
         try:
-            text = await response.text()
+            text = await asyncio.wait_for(response.text(), timeout=15)
             master_playlists.append((url, text))
         except Exception:
             pass
