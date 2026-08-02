@@ -135,19 +135,22 @@ def test_update_download_title_ignores_unrelated():
     assert cs._download_title.value == "Подготовка"
 
 
-def test_build_support_block_no_underline():
+def test_build_support_block_github_star_clickable():
     cs = CoursesScreen.__new__(CoursesScreen)
     block = cs._build_support_block()
     assert len(block) == 1
     column = block[0]
     assert isinstance(column, ft.Column)
-    row, hint = column.controls
-    assert isinstance(row, ft.Row)
-    assert isinstance(hint, ft.Text)
-    link = row.controls[1]
-    assert isinstance(link, ft.Text)
-    assert link.spans[1].style.decoration != ft.TextDecoration.UNDERLINE
-    assert link.spans[1].style.color == Color.ACCENT_LIGHT
+    text = column.controls[0]
+    assert isinstance(text, ft.Text)
+    spans = text.spans
+    assert len(spans) == 2
+    assert spans[0].text == "⭐ "
+    link = spans[1]
+    assert link.text == "Star on GitHub"
+    assert link.style.decoration != ft.TextDecoration.UNDERLINE
+    assert link.style.color == Color.ACCENT_LIGHT
+    assert all(span.on_click is not None for span in spans)
 
 
 def test_build_failed_lessons_scrollable():

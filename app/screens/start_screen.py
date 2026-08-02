@@ -627,7 +627,7 @@ class StartScreen:
             self._show_error(str(ex))
 
     def _show_error(self, message: str):
-        self.page.snack_bar = ft.SnackBar(  # type: ignore[attr-defined]
+        self.page.snack_bar = ft.SnackBar(
             content=ft.Row(
                 [
                     ft.Icon(ft.Icons.ERROR_OUTLINE, color=Color.RED, size=20),
@@ -642,5 +642,5 @@ class StartScreen:
             behavior=ft.SnackBarBehavior.FLOATING,
             elevation=10,
         )
-        self.page.snack_bar.open = True  # type: ignore[attr-defined]
+        self.page.snack_bar.open = True
         self.page.update()

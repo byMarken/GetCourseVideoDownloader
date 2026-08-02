@@ -14,9 +14,7 @@ from app.utils.paths import data_dir
 _COURSES_PATH = data_dir() / "courses.json"
 _SETTINGS_PATH = data_dir() / "settings.json"
 
-# Префикс итоговой сводки воркера — должен совпадать с givereq.py
 _SUMMARY_PREFIX = "[SUMMARY]"
-# Репозиторий проекта — для блока поддержки
 _GITHUB_URL = "https://github.com/markpekun/getcourse-downloader"
 
 
@@ -973,7 +971,6 @@ class CoursesScreen:
 
     @staticmethod
     def _parse_summary(summary_lines: list[str]) -> tuple[list[str], list[str]]:
-        """Разделяет строки сводки воркера на заголовок и список неудавшихся уроков."""
         header: list[str] = []
         failed: list[str] = []
         for line in summary_lines:
@@ -1444,7 +1441,6 @@ class CoursesScreen:
         self.page.update()
 
     def _build_failed_lessons(self, failed: list[str]) -> ft.Container:
-        """Скроллируемый список уроков, которые не удалось скачать."""
         rows: list[ft.Control] = []
         for line in failed:
             title = line[1:].strip() if line.startswith("✗") else line
@@ -1471,42 +1467,29 @@ class CoursesScreen:
         self._open_task = asyncio.create_task(self.page.launch_url(_GITHUB_URL))
 
     def _build_support_block(self) -> list[ft.Control]:
-        """Блок «Поддержи проект»: ссылка на репозиторий + подсказка о звёздах."""
-        link = ft.Text(
-            spans=[
-                ft.TextSpan(
-                    text="Сэкономил время? ",
-                    style=ft.TextStyle(size=14, color=Color.TEXT_SECONDARY),
-                ),
-                ft.TextSpan(
-                    text="Поддержи проект",
-                    style=ft.TextStyle(
-                        size=14,
-                        color=Color.ACCENT_LIGHT,
-                        weight=ft.FontWeight.W_600,
-                    ),
-                    on_click=self._open_github,
-                ),
-            ],
-            text_align=ft.TextAlign.CENTER,
-        )
         return [
             ft.Column(
-                spacing=6,
+                spacing=0,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=8,
-                        controls=[
-                            ft.Icon(ft.Icons.STAR_ROUNDED, size=18, color="#F59E0B"),
-                            link,
-                        ],
-                    ),
                     ft.Text(
-                        "Звёздочка помогает развитию проекта",
-                        size=12,
-                        color=Color.TEXT_MUTED,
+                        spans=[
+                            ft.TextSpan(
+                                text="⭐ ",
+                                on_click=self._open_github,
+                            ),
+                            ft.TextSpan(
+                                text="Star on GitHub",
+                                style=ft.TextStyle(
+                                    size=14,
+                                    color=Color.ACCENT_LIGHT,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                on_click=self._open_github,
+                            ),
+                        ],
+                        size=14,
+                        color=Color.TEXT_SECONDARY,
                         text_align=ft.TextAlign.CENTER,
                     ),
                 ],
@@ -1522,7 +1505,7 @@ class CoursesScreen:
         icon = ft.Icons.ERROR_OUTLINE if is_error else ft.Icons.CHECK_CIRCLE_OUTLINE
         icon_color = Color.RED if is_error else Color.GREEN
 
-        self.page.snack_bar = ft.SnackBar(  # type: ignore[attr-defined]
+        self.page.snack_bar = ft.SnackBar(
             content=ft.Row(
                 [
                     ft.Icon(icon, color=icon_color, size=18),
@@ -1537,5 +1520,5 @@ class CoursesScreen:
             behavior=ft.SnackBarBehavior.FLOATING,
             elevation=8,
         )
-        self.page.snack_bar.open = True  # type: ignore[attr-defined]
+        self.page.snack_bar.open = True
         self.page.update()
