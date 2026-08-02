@@ -17,7 +17,7 @@ if (-not (Test-Path $Flet)) {
     Write-Host "[2/6] Зависимости уже установлены."
 }
 
-$Version = "0.2.0"
+$Version = "0.2.1"
 try {
     $tag = git describe --tags --abbrev=0 2>$null
     if ($tag) { $Version = $tag.TrimStart('v') }
