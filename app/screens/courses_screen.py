@@ -16,6 +16,9 @@ _SETTINGS_PATH = data_dir() / "settings.json"
 
 # Префикс итоговой сводки воркера — должен совпадать с givereq.py
 _SUMMARY_PREFIX = "[SUMMARY]"
+# Репозиторий проекта — для блока поддержки
+_GITHUB_URL = "https://github.com/markpekun/getcourse-downloader"
+
 
 _COURSE_COLORS = [
     "#7C3AED",
@@ -45,6 +48,13 @@ class CoursesScreen:
         self.page = page
         self._downloading = False
         self._scroll_task: asyncio.Task | None = None
+        self._open_task: asyncio.Task | None = None
+        self._download_title = ft.Text(
+            "Подготовка",
+            size=18,
+            weight=ft.FontWeight.W_600,
+            color=Color.TEXT,
+        )
 
         with open(_COURSES_PATH, encoding="utf-8") as f:
             self.data: list = json.load(f)
@@ -962,11 +972,16 @@ class CoursesScreen:
         return Color.TEXT_SECONDARY
 
     @staticmethod
-    def _format_summary(summary_lines: list[str]) -> str | None:
-        """Собирает итоговую сводку загрузки из строк воркера."""
-        if not summary_lines:
-            return None
-        return "\n".join(summary_lines)
+    def _parse_summary(summary_lines: list[str]) -> tuple[list[str], list[str]]:
+        """Разделяет строки сводки воркера на заголовок и список неудавшихся уроков."""
+        header: list[str] = []
+        failed: list[str] = []
+        for line in summary_lines:
+            if line.startswith("✗"):
+                failed.append(line)
+            else:
+                header.append(line)
+        return header, failed
 
     def _scroll_smooth(self):
         try:
@@ -981,7 +996,46 @@ class CoursesScreen:
         except Exception:
             pass
 
+    @staticmethod
+    def _is_progress_line(text: str) -> bool:
+        return "Сегменты:" in text or "Сегментов:" in text
+
+    def _should_log(self, line: str) -> bool:
+        if line.startswith("Старт скачивания"):
+            return True
+        if "▶" in line and "Урок" in line:
+            return True
+        return self._is_progress_line(line)
+
+    def _update_download_title(self, line: str) -> bool:
+        check = line.lower()
+        if "сегмент" in check and "нет" not in check:
+            title = "Загрузка видео"
+        elif "не получен" in check:
+            title = "Плейлист не найден"
+        elif "плейлист" in check or "playlist" in check:
+            title = "Получение мастер-плейлиста"
+        elif "▶" in line:
+            title = "Загрузка страницы урока"
+        elif "авторизац" in check:
+            title = "Проверка авторизации"
+        else:
+            return False
+        if self._download_title.value != title:
+            self._download_title.value = title
+            return True
+        return False
+
+    def _refresh_title(self, changed: bool):
+        if changed:
+            with contextlib.suppress(IndexError, RuntimeError):
+                self.page.update()
+
     def _add_log(self, line: str):
+        title_changed = self._update_download_title(line)
+        if not self._should_log(line):
+            self._refresh_title(title_changed)
+            return
         self.log_lines.append(line)
         color = self._log_color(line)
         self._log_column.controls.append(ft.Text(line, size=13, color=color, selectable=False))
@@ -992,9 +1046,17 @@ class CoursesScreen:
             pass
 
     def _update_last_log(self, line: str):
+        title_changed = self._update_download_title(line)
+        if not self._should_log(line):
+            self._refresh_title(title_changed)
+            return
         if self._log_column.controls:
             last = self._log_column.controls[-1]
-            if isinstance(last, ft.Text):
+            if (
+                isinstance(last, ft.Text)
+                and self._is_progress_line(line)
+                and self._is_progress_line(last.value)
+            ):
                 last.value = line
                 last.color = self._log_color(line)
                 if self.log_lines:
@@ -1016,12 +1078,13 @@ class CoursesScreen:
             self._auth_overlay_task.cancel()
             self._auth_overlay_task = None
 
+        self._download_title.value = "Подготовка"
         self._overlay_card.content = ft.Column(
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=12,
             controls=[
                 ft.ProgressRing(width=40, height=40, color=Color.ACCENT, stroke_width=4),
-                ft.Text("Загрузка видео", size=18, weight=ft.FontWeight.W_600, color=Color.TEXT),
+                self._download_title,
                 self._log_container,
                 self._continue_btn,
             ],
@@ -1211,16 +1274,23 @@ class CoursesScreen:
 
             proc.wait()
 
-            summary = CoursesScreen._format_summary(summary_lines)
+            summary_header, failed = CoursesScreen._parse_summary(summary_lines)
 
             if proc.returncode == 0:
                 print("✅ Загрузка завершена")
                 print("Сэкономил время? Поддержи проект")
-                print("   https://github.com/markpekun/getcourse-downloader")
-                page.run_thread(lambda: self._finish_download(summary or "Загрузка завершена"))
+                print(f"   {_GITHUB_URL}")
+                message = "\n".join(summary_header) or "Загрузка завершена"
+                page.run_thread(lambda: self._finish_download(message, failed=failed))
             elif proc.returncode == 2:
-                message = summary or download_issue or "Не удалось скачать все выбранные уроки"
-                page.run_thread(lambda: self._finish_download(message, is_warning=True))
+                message = (
+                    "\n".join(summary_header)
+                    or download_issue
+                    or ("Не удалось скачать все выбранные уроки")
+                )
+                page.run_thread(
+                    lambda: self._finish_download(message, failed=failed, is_warning=True)
+                )
             else:
                 err = f"Код ошибки: {proc.returncode}"
                 print(f"❌ {err}")
@@ -1234,12 +1304,22 @@ class CoursesScreen:
             with contextlib.suppress(OSError):
                 os.unlink(lessons_file)
 
-    def _finish_download(self, message: str, is_error: bool = False, is_warning: bool = False):
+    def _finish_download(
+        self,
+        message: str,
+        is_error: bool = False,
+        is_warning: bool = False,
+        failed: list[str] | None = None,
+    ):
         self._downloading = False
-        self._show_completion_overlay(message, is_error, is_warning)
+        self._show_completion_overlay(message, is_error, is_warning, failed)
 
     def _show_completion_overlay(
-        self, message: str, is_error: bool = False, is_warning: bool = False
+        self,
+        message: str,
+        is_error: bool = False,
+        is_warning: bool = False,
+        failed: list[str] | None = None,
     ):
         if is_error:
             icon_name, icon_color, title = ft.Icons.ERROR_ROUNDED, Color.RED, "Ошибка"
@@ -1319,15 +1399,29 @@ class CoursesScreen:
                 text_align=ft.TextAlign.CENTER,
             ),
             ft.Container(height=8),
-            ft.Text(
-                message,
-                size=14,
-                color=Color.TEXT_SECONDARY,
-                text_align=ft.TextAlign.CENTER,
-            ),
         ]
+        if failed:
+            controls.append(
+                ft.Text(
+                    message,
+                    size=14,
+                    color=Color.TEXT_SECONDARY,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            )
+            controls.append(ft.Container(height=10))
+            controls.append(self._build_failed_lessons(failed))
+        else:
+            controls.append(
+                ft.Text(
+                    message,
+                    size=14,
+                    color=Color.TEXT_SECONDARY,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            )
 
-        if not is_error and not is_warning:
+        if not is_error:
             controls.append(ft.Container(height=18))
             controls.append(
                 ft.Container(
@@ -1336,62 +1430,8 @@ class CoursesScreen:
                     bgcolor="rgba(255,255,255,0.07)",
                 ),
             )
-            controls.append(ft.Container(height=96))
-
-            controls.append(
-                ft.Text(
-                    "Сэкономил время? Поддержи проект",
-                    size=15,
-                    weight=ft.FontWeight.W_400,
-                    color=Color.TEXT_SECONDARY,
-                    text_align=ft.TextAlign.CENTER,
-                ),
-            )
             controls.append(ft.Container(height=20))
-
-            star_btn = ft.Container(
-                content=ft.Row(
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=8,
-                    controls=[
-                        ft.Icon(ft.Icons.STAR_ROUNDED, size=18, color="#F59E0B"),
-                        ft.Text(
-                            "Поддержать звездой",
-                            size=15,
-                            weight=ft.FontWeight.W_600,
-                            color=Color.TEXT,
-                        ),
-                    ],
-                ),
-                width=452,
-                padding=ft.Padding.symmetric(horizontal=28, vertical=12),
-                border_radius=14,
-                border=ft.Border.all(1, "rgba(255,255,255,0.12)"),
-                bgcolor="rgba(255,255,255,0.02)",
-                scale=1.0,
-                animate_scale=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
-                animate=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
-                on_click=lambda e: (
-                    self._close_completion_overlay(e),
-                    asyncio.create_task(
-                        self.page.launch_url("https://github.com/markpekun/getcourse-downloader")
-                    ),
-                ),
-            )
-
-            def _on_star_hover(e):
-                if e.data == "true":
-                    star_btn.scale = 1.02
-                    star_btn.border = ft.Border.all(1, "rgba(124,58,237,0.35)")
-                    star_btn.bgcolor = "rgba(124,58,237,0.07)"
-                else:
-                    star_btn.scale = 1.0
-                    star_btn.border = ft.Border.all(1, "rgba(255,255,255,0.12)")
-                    star_btn.bgcolor = "rgba(255,255,255,0.02)"
-                self.page.update()
-
-            star_btn.on_hover = _on_star_hover
-            controls.append(star_btn)
+            controls.extend(self._build_support_block())
 
         controls.append(ft.Container(height=8))
 
@@ -1402,6 +1442,76 @@ class CoursesScreen:
         )
         self.overlay.visible = True
         self.page.update()
+
+    def _build_failed_lessons(self, failed: list[str]) -> ft.Container:
+        """Скроллируемый список уроков, которые не удалось скачать."""
+        rows: list[ft.Control] = []
+        for line in failed:
+            title = line[1:].strip() if line.startswith("✗") else line
+            rows.append(
+                ft.Row(
+                    spacing=8,
+                    controls=[
+                        ft.Icon(ft.Icons.CLOSE_ROUNDED, size=14, color=Color.RED),
+                        ft.Text(title, size=13, color=Color.TEXT_SECONDARY, selectable=False),
+                    ],
+                )
+            )
+        return ft.Container(
+            width=420,
+            height=180,
+            border_radius=10,
+            bgcolor="rgba(0,0,0,0.3)",
+            border=ft.Border.all(1, "rgba(255,255,255,0.06)"),
+            padding=ft.Padding.all(12),
+            content=ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO, controls=rows),
+        )
+
+    def _open_github(self, e=None):
+        self._open_task = asyncio.create_task(self.page.launch_url(_GITHUB_URL))
+
+    def _build_support_block(self) -> list[ft.Control]:
+        """Блок «Поддержи проект»: ссылка на репозиторий + подсказка о звёздах."""
+        link = ft.Text(
+            spans=[
+                ft.TextSpan(
+                    text="Сэкономил время? ",
+                    style=ft.TextStyle(size=14, color=Color.TEXT_SECONDARY),
+                ),
+                ft.TextSpan(
+                    text="Поддержи проект",
+                    style=ft.TextStyle(
+                        size=14,
+                        color=Color.ACCENT_LIGHT,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    on_click=self._open_github,
+                ),
+            ],
+            text_align=ft.TextAlign.CENTER,
+        )
+        return [
+            ft.Column(
+                spacing=6,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8,
+                        controls=[
+                            ft.Icon(ft.Icons.STAR_ROUNDED, size=18, color="#F59E0B"),
+                            link,
+                        ],
+                    ),
+                    ft.Text(
+                        "Звёздочка помогает развитию проекта",
+                        size=12,
+                        color=Color.TEXT_MUTED,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                ],
+            )
+        ]
 
     def _close_completion_overlay(self, e=None):
         self.overlay.visible = False
