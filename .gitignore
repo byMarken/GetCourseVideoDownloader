@@ -7,6 +7,7 @@ app/session_data
 app/data
 resources
 
+picture
 build/
 dist/
 *.spec
