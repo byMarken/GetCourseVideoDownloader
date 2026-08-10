@@ -1,25 +1,33 @@
 import shutil
-from pathlib import Path
 
 import pytest
 
-from app.utils import ffmpeg
+from getcourse_downloader.infrastructure.media.ffmpeg import FfmpegMuxer
+from getcourse_downloader.infrastructure.platform.paths import AppPaths
 
 
-def test_get_ffmpeg_path_bundled(monkeypatch, tmp_path):
-    (tmp_path / "ffmpeg.exe").write_bytes(b"")
-    monkeypatch.setattr(ffmpeg, "resources_dir", lambda: tmp_path)
-    assert ffmpeg.get_ffmpeg_path() == str((tmp_path / "ffmpeg.exe").resolve())
+def _paths(tmp_path) -> AppPaths:
+    return AppPaths(
+        data=tmp_path / "data",
+        session=tmp_path / "session",
+        resources=tmp_path / "resources",
+    )
 
 
-def test_get_ffmpeg_path_system(monkeypatch):
-    monkeypatch.setattr(ffmpeg, "resources_dir", lambda: Path("nonexistent"))
+def test_get_ffmpeg_path_bundled(tmp_path):
+    paths = _paths(tmp_path)
+    paths.resources.mkdir()
+    executable = paths.resources / "ffmpeg.exe"
+    executable.write_bytes(b"")
+    assert FfmpegMuxer(paths).executable() == str(executable.resolve())
+
+
+def test_get_ffmpeg_path_system(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda name: "C:/ffmpeg/bin/ffmpeg.exe")
-    assert ffmpeg.get_ffmpeg_path() == "C:/ffmpeg/bin/ffmpeg.exe"
+    assert FfmpegMuxer(_paths(tmp_path)).executable() == "C:/ffmpeg/bin/ffmpeg.exe"
 
 
-def test_get_ffmpeg_path_not_found(monkeypatch):
-    monkeypatch.setattr(ffmpeg, "resources_dir", lambda: Path("nonexistent"))
+def test_get_ffmpeg_path_not_found(monkeypatch, tmp_path):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(FileNotFoundError):
-        ffmpeg.get_ffmpeg_path()
+        FfmpegMuxer(_paths(tmp_path)).executable()

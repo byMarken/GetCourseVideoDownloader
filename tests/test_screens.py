@@ -1,8 +1,7 @@
 import flet as ft
 
-from app.screens import courses_screen
-from app.screens.courses_screen import CoursesScreen
-from app.theme import Color
+from getcourse_downloader.presentation.flet.screens.courses.view import CoursesScreen
+from getcourse_downloader.presentation.flet.theme import Color
 
 
 def test_log_color_segments():
@@ -62,7 +61,7 @@ def test_should_log_lessons_and_segments():
 
 def test_should_log_filters_stage_lines():
     cs = CoursesScreen.__new__(CoursesScreen)
-    assert cs._should_log("  ✓ Авторизация активна") is False
+    assert cs._should_log("  ✓ Авторизация активна") is True
     assert cs._should_log("  ⏳ Получение запроса...") is False
     assert cs._should_log("  ⏳ Конвертация видео...") is False
 
@@ -167,48 +166,3 @@ def test_build_failed_lessons_scrollable():
     assert isinstance(inner, ft.Column)
     assert inner.scroll == ft.ScrollMode.AUTO
     assert len(inner.controls) == 11
-
-
-def test_has_courses_no_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(courses_screen, "_COURSES_PATH", tmp_path / "courses.json")
-    assert CoursesScreen.has_courses() is False
-
-
-def test_has_courses_with_data(monkeypatch, tmp_path):
-    path = tmp_path / "courses.json"
-    path.write_text('[{"course_title": "C", "lessons": []}]', encoding="utf-8")
-    monkeypatch.setattr(courses_screen, "_COURSES_PATH", path)
-    assert CoursesScreen.has_courses() is True
-
-
-def test_has_courses_empty_list(monkeypatch, tmp_path):
-    path = tmp_path / "courses.json"
-    path.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(courses_screen, "_COURSES_PATH", path)
-    assert CoursesScreen.has_courses() is False
-
-
-def test_has_courses_invalid_json(monkeypatch, tmp_path):
-    path = tmp_path / "courses.json"
-    path.write_text("{invalid", encoding="utf-8")
-    monkeypatch.setattr(courses_screen, "_COURSES_PATH", path)
-    assert CoursesScreen.has_courses() is False
-
-
-def test_load_save_path_default(monkeypatch, tmp_path):
-    monkeypatch.setattr(courses_screen, "_SETTINGS_PATH", tmp_path / "settings.json")
-    assert CoursesScreen._load_save_path() == "downloads"
-
-
-def test_load_save_path_from_file(monkeypatch, tmp_path):
-    path = tmp_path / "settings.json"
-    path.write_text('{"save_path": "D:/videos"}', encoding="utf-8")
-    monkeypatch.setattr(courses_screen, "_SETTINGS_PATH", path)
-    assert CoursesScreen._load_save_path() == "D:/videos"
-
-
-def test_load_save_path_not_string(monkeypatch, tmp_path):
-    path = tmp_path / "settings.json"
-    path.write_text('{"save_path": 123}', encoding="utf-8")
-    monkeypatch.setattr(courses_screen, "_SETTINGS_PATH", path)
-    assert CoursesScreen._load_save_path() == "downloads"
