@@ -1,33 +1,52 @@
-name: Lint
+name: Quality
 
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v9
         with:
-          python-version: "3.13"
+          version: "0.11.20"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install dependencies
-        run: |
-          pip install -r req.txt ruff mypy pytest
+      - name: Install Python
+        run: uv python install ${{ matrix.python-version }}
 
-      - name: Ruff check
-        run: ruff check .
+      - name: Sync dependencies
+        run: uv sync --locked --group dev --python ${{ matrix.python-version }}
 
-      - name: Ruff format check
-        run: ruff format --check .
+      - name: Ruff
+        run: uv run --no-sync ruff check src tests main.py
 
-      - name: mypy
-        run: mypy app/ main.py
+      - name: Ruff format
+        run: uv run --no-sync ruff format --check src tests main.py
 
-      - name: pytest
-        run: pytest
+      - name: Mypy
+        run: uv run --no-sync mypy src main.py
+
+      - name: Tests
+        run: uv run --no-sync pytest --cov=getcourse_downloader --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml

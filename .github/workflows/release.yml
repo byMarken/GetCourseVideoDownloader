@@ -2,8 +2,7 @@ name: Build Windows release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -20,32 +19,33 @@ jobs:
       SIGNPATH_SIGNING_POLICY_SLUG: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v9
         with:
-          python-version: "3.13"
-          cache: "pip"
-          cache-dependency-path: req.txt
+          version: "0.11.20"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install dependencies
+      - name: Install Python and dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r req.txt pyinstaller
+          uv python install 3.13
+          uv sync --locked --no-default-groups --group build --python 3.13
 
       - name: Install Playwright Firefox
-        run: python -m playwright install firefox
+        run: uv run --no-sync playwright install firefox
 
       - name: Download FFmpeg
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path resources | Out-Null
-          curl.exe -L -o "$env:TEMP\ffmpeg-release-essentials.zip" "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-          Expand-Archive "$env:TEMP\ffmpeg-release-essentials.zip" "$env:TEMP\ffmpeg-build" -Force
-          $ff = Get-ChildItem "$env:TEMP\ffmpeg-build" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          Copy-Item $ff.FullName "resources\ffmpeg.exe" -Force
+          curl.exe -L --fail -o "$env:RUNNER_TEMP\ffmpeg.zip" "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg" -Force
+          $Ffmpeg = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          if (-not $Ffmpeg) { throw "ffmpeg.exe not found" }
+          Copy-Item $Ffmpeg.FullName "resources\ffmpeg.exe" -Force
 
-      - name: Copy Playwright browsers to resources
+      - name: Copy Playwright browser
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "resources\ms-playwright" | Out-Null
@@ -53,29 +53,27 @@ jobs:
             Copy-Item $_.FullName "resources\ms-playwright" -Recurse -Force
           }
 
-      - name: Build with flet pack
+      - name: Build application
         shell: pwsh
         run: |
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $Version = "${{ github.ref_name }}".TrimStart('v')
-          } else {
-            $Version = "0.0.0"
-          }
-          if (-not $Version) { $Version = "0.0.0" }
-          $VerParts = (($Version -split '\.') + @('0','0','0','0'))[0..3]
-          $FileVersion = $VerParts -join '.'
-          flet pack main.py -y -D -n GetCourseVideoDownloader `
+          $Version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0" }
+          $Parts = (($Version -split '\.') + @("0", "0", "0", "0"))[0..3]
+          uv run --no-sync flet pack main.py -y -D -n GetCourseVideoDownloader `
             --product-name "GetCourse Video Downloader" `
             --file-description "Загрузка видео с GetCourse" `
             --company-name "Mark Pekun" `
             --product-version $Version `
-            --file-version $FileVersion
+            --file-version ($Parts -join ".")
+          if ($LASTEXITCODE -ne 0) { throw "flet pack failed" }
+          Copy-Item resources "dist\GetCourseVideoDownloader" -Recurse -Force
 
-      - name: Copy resources into bundle
+      - name: Smoke-test packaged worker
         shell: pwsh
-        run: Copy-Item resources "dist\GetCourseVideoDownloader\resources" -Recurse -Force
+        run: |
+          & "dist\GetCourseVideoDownloader\GetCourseVideoDownloader.exe" --download-worker --help
+          if ($LASTEXITCODE -ne 0) { throw "Packaged worker smoke-test failed" }
 
-      - name: Upload exe for signing
+      - name: Upload executable for signing
         if: env.SIGNPATH_API_TOKEN != ''
         id: upload-exe
         uses: actions/upload-artifact@v4
@@ -85,7 +83,7 @@ jobs:
           archive: false
           retention-days: 1
 
-      - name: Sign exe (SignPath Foundation)
+      - name: Sign executable
         if: env.SIGNPATH_API_TOKEN != ''
         uses: SignPath/github-action-submit-signing-request@v2
         with:
@@ -98,26 +96,33 @@ jobs:
           output-artifact-directory: signed-exe
           skip-decompress: true
 
-      - name: Finalize bundle and create archive
+      - name: Finalize release assets
         shell: pwsh
         run: |
           $SignedExe = "signed-exe\GetCourseVideoDownloader.exe"
           if (Test-Path $SignedExe) {
             Copy-Item $SignedExe "dist\GetCourseVideoDownloader\GetCourseVideoDownloader.exe" -Force
-            Write-Host "Signed exe installed"
-          } else {
-            Write-Host "No signed exe found, releasing unsigned"
           }
           Compress-Archive -Path "dist\GetCourseVideoDownloader" -DestinationPath "dist\GetCourseVideoDownloader-win-x64.zip" -CompressionLevel Optimal -Force
+          $Hash = (Get-FileHash "dist\GetCourseVideoDownloader-win-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content "dist\GetCourseVideoDownloader-win-x64.zip.sha256" "$Hash  GetCourseVideoDownloader-win-x64.zip" -Encoding ascii
+          uv export --preview-features sbom-export --locked --no-default-groups --format cyclonedx1.5 --output-file dist/sbom.cdx.json
 
-      - name: Upload artifact
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: GetCourseVideoDownloader-win-x64
-          path: dist/GetCourseVideoDownloader-win-x64.zip
+          path: |
+            dist/GetCourseVideoDownloader-win-x64.zip
+            dist/GetCourseVideoDownloader-win-x64.zip.sha256
+            dist/sbom.cdx.json
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/GetCourseVideoDownloader-win-x64.zip
+          generate_release_notes: true
+          files: |
+            dist/GetCourseVideoDownloader-win-x64.zip
+            dist/GetCourseVideoDownloader-win-x64.zip.sha256
+            dist/sbom.cdx.json
