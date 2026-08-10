@@ -11,4 +11,4 @@ repos:
     hooks:
       - id: mypy
         pass_filenames: false
-        args: ["app/", "main.py"]
+        args: ["src/", "main.py"]

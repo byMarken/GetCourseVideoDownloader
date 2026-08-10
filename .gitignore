@@ -1,11 +1,17 @@
 __pycache__/
-session_data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+.coverage
+coverage.xml
+htmlcov/
+*.log
 .idea
 .claude
 .venv
-app/session_data
-app/data
 resources
+.env
 
 picture
 build/
