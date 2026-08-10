@@ -1,68 +1,76 @@
+param(
+    [switch]$SkipSync
+)
+
 $ErrorActionPreference = "Stop"
-$Root = $PSScriptRoot
+$Root = [System.IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location $Root
 
-$Python = Join-Path $Root ".venv\Scripts\python.exe"
-$Flet   = Join-Path $Root ".venv\Scripts\flet.exe"
-
-if (-not (Test-Path $Python)) {
-    Write-Host "[1/6] Создаю виртуальное окружение .venv..."
-    python -m venv .venv
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv не найден. Установите его: https://docs.astral.sh/uv/getting-started/installation/"
 }
-if (-not (Test-Path $Flet)) {
-    Write-Host "[2/6] Устанавливаю зависимости (flet, playwright, ...) и PyInstaller..."
-    & $Python -m pip install --upgrade pip
-    & $Python -m pip install -r req.txt pyinstaller
+
+if (-not $SkipSync) {
+    Write-Host "[1/7] Синхронизирую зависимости из uv.lock..."
+    uv sync --locked --no-default-groups --group build
+    if ($LASTEXITCODE -ne 0) { throw "uv sync завершился с ошибкой ($LASTEXITCODE)" }
 } else {
-    Write-Host "[2/6] Зависимости уже установлены."
+    Write-Host "[1/7] Синхронизация зависимостей пропущена."
 }
 
-$Version = "0.2.1"
+$VersionLine = Select-String -Path (Join-Path $Root "pyproject.toml") -Pattern '^version = "(.+)"$'
+$Version = $VersionLine.Matches[0].Groups[1].Value
 try {
-    $tag = git describe --tags --abbrev=0 2>$null
-    if ($tag) { $Version = $tag.TrimStart('v') }
+    $ExactTag = git describe --tags --exact-match HEAD 2>$null
+    if ($ExactTag) { $Version = $ExactTag.TrimStart("v") }
 } catch {}
-$VerParts = (($Version -split '\.') + @('0','0','0','0'))[0..3]
-$FileVersion = $VerParts -join '.'
+$VersionParts = (($Version -split '\.') + @("0", "0", "0", "0"))[0..3]
+$FileVersion = $VersionParts -join "."
 
 $AppName = "GetCourseVideoDownloader"
-$Res = Join-Path $Root "resources"
+$Resources = Join-Path $Root "resources"
+New-Item -ItemType Directory -Force -Path $Resources | Out-Null
 
-Write-Host "[3/6] FFmpeg..."
-New-Item -ItemType Directory -Force -Path $Res | Out-Null
-$ffmpegExe = Join-Path $Res "ffmpeg.exe"
-if (-not (Test-Path $ffmpegExe)) {
-    Write-Host "  Скачиваю ffmpeg-release-essentials (~80 МБ)..."
-    $ffmpegZip = Join-Path $env:TEMP "ffmpeg-release-essentials.zip"
-    curl.exe -L -o $ffmpegZip "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-    $extract = Join-Path $env:TEMP "ffmpeg-build"
-    if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-    Expand-Archive $ffmpegZip -DestinationPath $extract -Force
-    $found = Get-ChildItem $extract -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-    Copy-Item $found.FullName $ffmpegExe -Force
-} else {
-    Write-Host "  ffmpeg.exe уже есть в resources\."
-}
-
-Write-Host "[4/6] Браузеры Playwright (Firefox)..."
-$msPwSrc = Join-Path $env:LOCALAPPDATA "ms-playwright"
-$msPwDst = Join-Path $Res "ms-playwright"
-if (-not (Test-Path $msPwSrc)) {
-    Write-Host "  Не найдены браузеры, устанавливаю Firefox через playwright..."
-    & $Python -m playwright install firefox
-}
-if (Test-Path $msPwSrc) {
-    New-Item -ItemType Directory -Force -Path $msPwDst | Out-Null
-    Get-ChildItem $msPwSrc -Directory -Filter "firefox-*" | ForEach-Object {
-        Write-Host "  Копирую $($_.Name)..."
-        Copy-Item $_.FullName $msPwDst -Recurse -Force
+Write-Host "[2/7] Проверяю FFmpeg..."
+$FfmpegExe = Join-Path $Resources "ffmpeg.exe"
+if (-not (Test-Path -LiteralPath $FfmpegExe)) {
+    $TempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $Extract = Join-Path $TempRoot ("gcd-ffmpeg-" + [guid]::NewGuid().ToString("N"))
+    $Archive = Join-Path $TempRoot ("gcd-ffmpeg-" + [guid]::NewGuid().ToString("N") + ".zip")
+    New-Item -ItemType Directory -Path $Extract | Out-Null
+    try {
+        Write-Host "  Скачиваю ffmpeg-release-essentials..."
+        curl.exe -L --fail -o $Archive "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+        if ($LASTEXITCODE -ne 0) { throw "Не удалось скачать FFmpeg" }
+        Expand-Archive -LiteralPath $Archive -DestinationPath $Extract -Force
+        $Found = Get-ChildItem -LiteralPath $Extract -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        if (-not $Found) { throw "ffmpeg.exe отсутствует в загруженном архиве" }
+        Copy-Item -LiteralPath $Found.FullName -Destination $FfmpegExe -Force
+    } finally {
+        if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
+        $ResolvedExtract = [System.IO.Path]::GetFullPath($Extract)
+        if ($ResolvedExtract.StartsWith($TempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $ResolvedExtract -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
-} else {
-    Write-Error "Не удалось получить браузеры Playwright (нет $msPwSrc)."
 }
 
-Write-Host "[5/6] flet pack..."
-& $Flet pack main.py -y -D -n $AppName `
+Write-Host "[3/7] Проверяю Firefox для Playwright..."
+$PlaywrightSource = Join-Path $env:LOCALAPPDATA "ms-playwright"
+if (-not (Get-ChildItem -LiteralPath $PlaywrightSource -Directory -Filter "firefox-*" -ErrorAction SilentlyContinue)) {
+    uv run --no-sync playwright install firefox
+    if ($LASTEXITCODE -ne 0) { throw "Playwright не смог установить Firefox" }
+}
+
+Write-Host "[4/7] Копирую браузер в resources..."
+$PlaywrightDestination = Join-Path $Resources "ms-playwright"
+New-Item -ItemType Directory -Force -Path $PlaywrightDestination | Out-Null
+Get-ChildItem -LiteralPath $PlaywrightSource -Directory -Filter "firefox-*" | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $PlaywrightDestination -Recurse -Force
+}
+
+Write-Host "[5/7] Собираю Windows-приложение..."
+uv run --no-sync flet pack main.py -y -D -n $AppName `
     --product-name "GetCourse Video Downloader" `
     --file-description "Загрузка видео с GetCourse" `
     --company-name "Mark Pekun" `
@@ -70,14 +78,24 @@ Write-Host "[5/6] flet pack..."
     --file-version $FileVersion
 if ($LASTEXITCODE -ne 0) { throw "flet pack завершился с ошибкой ($LASTEXITCODE)" }
 
-Write-Host "[6/6] Формирую релиз..."
 $DistApp = Join-Path $Root "dist\$AppName"
-Copy-Item $Res $DistApp -Recurse -Force
+Copy-Item -LiteralPath $Resources -Destination $DistApp -Recurse -Force
 
+Write-Host "[6/7] Проверяю worker внутри EXE..."
+$Executable = Join-Path $DistApp "$AppName.exe"
+& $Executable --download-worker --help | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Собранный EXE не прошёл worker smoke-test" }
+
+Write-Host "[7/7] Создаю архив и SHA-256..."
 $ZipPath = Join-Path $Root "dist\$AppName-win-x64.zip"
-if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
-Compress-Archive -Path $DistApp -DestinationPath $ZipPath -CompressionLevel Optimal -Force
+if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
+Compress-Archive -LiteralPath $DistApp -DestinationPath $ZipPath -CompressionLevel Optimal
+$Hash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath "$ZipPath.sha256" -Value "$Hash  $([System.IO.Path]::GetFileName($ZipPath))" -Encoding ascii
+uv export --preview-features sbom-export --locked --no-default-groups --format cyclonedx1.5 --output-file (Join-Path $Root "dist\sbom.cdx.json") | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Не удалось сформировать SBOM" }
 
 Write-Host ""
 Write-Host "Готово: $ZipPath"
-Write-Host "Проверка: запустите $DistApp\$AppName.exe"
+Write-Host "SHA-256: $Hash"
+Write-Host "SBOM: $(Join-Path $Root 'dist\sbom.cdx.json')"
