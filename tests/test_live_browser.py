@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
-from app.scripts import live_browser
+from getcourse_downloader.presentation.cli import live_browser
 
 
 class _FakePage:
@@ -106,7 +106,7 @@ def test_open_live_browser_explains_profile_lock(monkeypatch):
         asyncio.run(live_browser.open_live_browser(object()))
 
     message = str(error.value)
-    assert "session_data" in message
+    assert "browser-profile" in message
     assert "Закройте основное приложение" in message
 
 

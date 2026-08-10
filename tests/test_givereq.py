@@ -1,10 +1,10 @@
-from app.services.givereq import (
-    _extract_quality,
-    _extract_segment_urls,
-    _parse_master_playlist,
-    _select_quality_url,
-    sanitize_filename,
+from getcourse_downloader.infrastructure.media.hls import (
+    extract_quality,
+    extract_segment_urls,
+    parse_master_playlist,
+    select_quality_url,
 )
+from getcourse_downloader.infrastructure.storage.filenames import sanitize_filename
 
 
 def test_sanitize_filename_removes_status_words():
@@ -22,9 +22,9 @@ def test_sanitize_filename_replaces_illegal_chars():
 
 
 def test_extract_quality_from_url():
-    assert _extract_quality("https://example.com/video/720/index.m3u8") == 720
-    assert _extract_quality("https://example.com/video/1080/index.m3u8") == 1080
-    assert _extract_quality("https://example.com/video/noquality/index.m3u8") == 0
+    assert extract_quality("https://example.com/video/720/index.m3u8") == 720
+    assert extract_quality("https://example.com/video/1080/index.m3u8") == 1080
+    assert extract_quality("https://example.com/video/noquality/index.m3u8") == 0
 
 
 MASTER_PLAYLIST = """#EXTM3U
@@ -38,7 +38,7 @@ MASTER_PLAYLIST = """#EXTM3U
 
 
 def test_parse_master_playlist_resolves_relative_urls():
-    qualities = _parse_master_playlist(MASTER_PLAYLIST, "https://example.com/master.m3u8")
+    qualities = parse_master_playlist(MASTER_PLAYLIST, "https://example.com/master.m3u8")
     assert qualities == {
         360: "https://example.com/360/index.m3u8",
         720: "https://example.com/720/index.m3u8",
@@ -48,40 +48,40 @@ def test_parse_master_playlist_resolves_relative_urls():
 
 def test_parse_master_playlist_uses_resolution_fallback():
     playlist = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\nstream.m3u8\n"
-    qualities = _parse_master_playlist(playlist, "https://example.com/master.m3u8")
+    qualities = parse_master_playlist(playlist, "https://example.com/master.m3u8")
     assert qualities == {720: "https://example.com/stream.m3u8"}
 
 
 def test_select_quality_auto_picks_highest():
     qualities = {360: "a", 720: "b", 1080: "c"}
-    assert _select_quality_url(qualities, "auto") == "c"
+    assert select_quality_url(qualities, "auto") == "c"
 
 
 def test_select_quality_exact_match():
     qualities = {360: "a", 720: "b", 1080: "c"}
-    assert _select_quality_url(qualities, "720") == "b"
+    assert select_quality_url(qualities, "720") == "b"
 
 
 def test_select_quality_falls_back_to_best_below():
     qualities = {360: "a", 720: "b"}
-    assert _select_quality_url(qualities, "1080") == "b"
+    assert select_quality_url(qualities, "1080") == "b"
 
 
 def test_select_quality_falls_back_to_lowest():
     qualities = {1080: "c"}
-    assert _select_quality_url(qualities, "360") == "c"
+    assert select_quality_url(qualities, "360") == "c"
 
 
 def test_select_quality_empty():
-    assert _select_quality_url({}, "720") is None
+    assert select_quality_url({}, "720") is None
 
 
 def test_extract_quality_ignores_query_string():
-    assert _extract_quality("https://example.com/video/720/index.m3u8?token=abc") == 720
+    assert extract_quality("https://example.com/video/720/index.m3u8?token=abc") == 720
 
 
 def test_extract_quality_ignores_query_numbers():
-    assert _extract_quality("https://example.com/index.m3u8?quality=1080") == 0
+    assert extract_quality("https://example.com/index.m3u8?quality=1080") == 0
 
 
 def test_parse_master_playlist_absolute_urls():
@@ -92,7 +92,7 @@ def test_parse_master_playlist_absolute_urls():
         "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n"
         "https://cdn.example.com/1080/index.m3u8\n"
     )
-    qualities = _parse_master_playlist(playlist, "https://example.com/master.m3u8")
+    qualities = parse_master_playlist(playlist, "https://example.com/master.m3u8")
     assert qualities == {
         720: "https://cdn.example.com/720/index.m3u8",
         1080: "https://cdn.example.com/1080/index.m3u8",
@@ -101,17 +101,17 @@ def test_parse_master_playlist_absolute_urls():
 
 def test_parse_master_playlist_uses_url_quality_without_resolution():
     playlist = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000\n480/index.m3u8\n"
-    qualities = _parse_master_playlist(playlist, "https://example.com/master.m3u8")
+    qualities = parse_master_playlist(playlist, "https://example.com/master.m3u8")
     assert qualities == {480: "https://example.com/480/index.m3u8"}
 
 
 def test_parse_master_playlist_empty():
-    assert _parse_master_playlist("", "https://example.com/master.m3u8") == {}
+    assert parse_master_playlist("", "https://example.com/master.m3u8") == {}
 
 
 def test_extract_segment_urls_resolves_relative():
     playlist = "#EXTM3U\nseg1.ts\nseg2.bin\n#EXTINF:5,\n"
-    urls = _extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
+    urls = extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
     assert urls == [
         "https://cdn.example.com/video/720/seg1.ts",
         "https://cdn.example.com/video/720/seg2.bin",
@@ -120,11 +120,11 @@ def test_extract_segment_urls_resolves_relative():
 
 def test_extract_segment_urls_keeps_absolute():
     playlist = "#EXTM3U\nhttps://cdn.example.com/seg1.bin\n"
-    urls = _extract_segment_urls(playlist, "https://cdn.example.com/video/index.m3u8")
+    urls = extract_segment_urls(playlist, "https://cdn.example.com/video/index.m3u8")
     assert urls == ["https://cdn.example.com/seg1.bin"]
 
 
 def test_extract_segment_urls_ignores_comments_and_others():
     playlist = "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6,\nseg1.ts\nhttps://other.example.com/a.m3u8\n"
-    urls = _extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
+    urls = extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
     assert urls == ["https://cdn.example.com/video/720/seg1.ts"]
