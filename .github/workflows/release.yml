@@ -76,7 +76,7 @@ jobs:
       - name: Upload executable for signing
         if: env.SIGNPATH_API_TOKEN != ''
         id: upload-exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-exe
           path: dist/GetCourseVideoDownloader/GetCourseVideoDownloader.exe
@@ -109,7 +109,7 @@ jobs:
           uv export --preview-features sbom-export --locked --no-default-groups --format cyclonedx1.5 --output-file dist/sbom.cdx.json
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: GetCourseVideoDownloader-win-x64
           path: |
