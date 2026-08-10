@@ -1,12 +1,6 @@
-import asyncio
 import io
 import os
 import sys
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
 
 def _prepare_worker_stdio() -> None:
@@ -27,14 +21,12 @@ def _prepare_worker_stdio() -> None:
 
 if __name__ == "__main__":
     if "--download-worker" in sys.argv:
-        from app.services.givereq import main as worker_main
+        from getcourse_downloader.presentation.cli.worker import main as worker_main
 
         _prepare_worker_stdio()
         sys.argv = [arg for arg in sys.argv if arg != "--download-worker"]
-        raise SystemExit(asyncio.run(worker_main()))
+        raise SystemExit(worker_main())
 
-    import flet as ft
+    from getcourse_downloader.presentation.flet.app import run
 
-    from app.main import main
-
-    ft.run(main)
+    run()
