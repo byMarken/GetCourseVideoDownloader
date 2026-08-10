@@ -6,6 +6,8 @@ from pathlib import Path
 
 from platformdirs import user_data_path
 
+APP_NAME = "GetCourseVideoDownloader"
+
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
@@ -26,7 +28,7 @@ class AppPaths:
     @classmethod
     def discover(cls) -> AppPaths:
         root = project_root()
-        user_root = user_data_path("GetCourseVideoDownloader", "Mark Pekun", roaming=False)
+        user_root = user_data_path(APP_NAME, appauthor=False, roaming=False)
         return cls(
             data=user_root / "data",
             session=user_root / "browser-profile",

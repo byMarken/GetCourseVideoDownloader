@@ -25,18 +25,29 @@ def parse_master_playlist(text: str, master_url: str) -> dict[int, str]:
 
     qualities: dict[int, str] = {}
     last_resolution: int | None = None
+    expects_variant = False
     for raw_line in text.strip().splitlines():
         line = raw_line.strip()
         if line.startswith("#EXT-X-STREAM-INF:"):
             match = re.search(r"RESOLUTION=\d+x(\d+)", line)
             last_resolution = int(match.group(1)) if match else None
-        elif line and not line.startswith("#"):
+            expects_variant = True
+        elif line and not line.startswith("#") and expects_variant:
             absolute_url = urljoin(master_url, line)
-            quality = extract_quality(absolute_url) or last_resolution or 0
+            quality = last_resolution or extract_quality(absolute_url) or 0
             if quality > 0:
                 qualities[quality] = absolute_url
             last_resolution = None
+            expects_variant = False
     return qualities
+
+
+def is_hls_playlist(text: str) -> bool:
+    return text.lstrip().startswith("#EXTM3U")
+
+
+def is_hls_master_playlist(text: str) -> bool:
+    return is_hls_playlist(text) and "#EXT-X-STREAM-INF" in text
 
 
 def select_quality_url(qualities: dict[int, str], quality: str) -> str | None:
@@ -52,12 +63,26 @@ def select_quality_url(qualities: dict[int, str], quality: str) -> str | None:
     return qualities[below[-1] if below else available[0]]
 
 
+def select_stream_playlist_url(text: str, playlist_url: str, quality: str) -> str | None:
+    if is_hls_master_playlist(text):
+        qualities = parse_master_playlist(text, playlist_url)
+        return select_quality_url(qualities, quality)
+    if is_hls_playlist(text):
+        return playlist_url
+    return None
+
+
 def extract_segment_urls(playlist: str, playlist_url: str) -> list[str]:
-    return [
-        urljoin(playlist_url, line.strip())
-        for line in playlist.splitlines()
-        if line.strip() and not line.startswith("#") and (".bin" in line or ".ts" in line)
-    ]
+    segments: list[str] = []
+    for raw_line in playlist.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        absolute_url = urljoin(playlist_url, line)
+        if urlsplit(absolute_url).path.casefold().endswith(".m3u8"):
+            continue
+        segments.append(absolute_url)
+    return segments
 
 
 class HlsDownloader:

@@ -20,12 +20,13 @@ from getcourse_downloader.domain.models import (
 )
 from getcourse_downloader.infrastructure.browser.playwright import PlaywrightBrowserFactory
 from getcourse_downloader.infrastructure.getcourse.video_signals import (
-    is_master_playlist_url,
+    is_hls_playlist_url,
 )
 from getcourse_downloader.infrastructure.media.hls import (
     HlsDownloader,
-    parse_master_playlist,
-    select_quality_url,
+    is_hls_master_playlist,
+    is_hls_playlist,
+    select_stream_playlist_url,
 )
 from getcourse_downloader.infrastructure.storage.filenames import sanitize_filename
 
@@ -189,17 +190,21 @@ class PlaywrightDownloadGateway:
         emit: EventHandler,
     ) -> bool:
         page = await browser.new_page()
-        master_urls_seen: set[str] = set()
+        playlist_urls_seen: set[str] = set()
         master_playlists: list[tuple[str, str]] = []
+        media_playlists: list[tuple[str, str]] = []
 
         async def on_response(response) -> None:
             url = response.url
-            if not is_master_playlist_url(url) or url in master_urls_seen:
+            if not is_hls_playlist_url(url) or url in playlist_urls_seen:
                 return
-            master_urls_seen.add(url)
+            playlist_urls_seen.add(url)
             try:
                 text = await asyncio.wait_for(response.text(), timeout=15)
-                master_playlists.append((url, text))
+                if is_hls_master_playlist(text):
+                    master_playlists.append((url, text))
+                elif is_hls_playlist(text):
+                    media_playlists.append((url, text))
             except Exception:
                 return
 
@@ -219,21 +224,26 @@ class PlaywrightDownloadGateway:
                 )
             )
             started_at = time.monotonic()
-            while not master_playlists and time.monotonic() - started_at < 30:
+            while (
+                not master_playlists and not media_playlists and time.monotonic() - started_at < 30
+            ):
                 if self._cancelled:
                     return False
                 await asyncio.sleep(0.5)
 
-            if not master_playlists:
+            if not master_playlists and not media_playlists:
                 emit(
                     DownloadEvent(
                         DownloadEventType.ERROR,
-                        message="Master playlist не получен",
+                        message="HLS playlist не получен",
                         stage="playlist",
                         lesson=item.lesson.title,
                     )
                 )
                 return False
+
+            await asyncio.sleep(0.5)
+            playlists = master_playlists if master_playlists else media_playlists
 
             course_path = save_root / sanitize_filename(item.course_title, fallback="course")
             lesson_name = sanitize_filename(item.lesson.title)
@@ -244,7 +254,7 @@ class PlaywrightDownloadGateway:
             idle_since = time.monotonic()
 
             while True:
-                pending = [(url, text) for url, text in master_playlists if url not in processed]
+                pending = [(url, text) for url, text in playlists if url not in processed]
                 if not pending:
                     if time.monotonic() - idle_since >= 5:
                         break
@@ -254,8 +264,7 @@ class PlaywrightDownloadGateway:
                 for master_url, master_text in pending:
                     processed.add(master_url)
                     video_count += 1
-                    qualities = parse_master_playlist(master_text, master_url)
-                    selected_url = select_quality_url(qualities, quality)
+                    selected_url = select_stream_playlist_url(master_text, master_url, quality)
                     if not selected_url:
                         emit(
                             DownloadEvent(
@@ -267,7 +276,7 @@ class PlaywrightDownloadGateway:
                         )
                         continue
 
-                    if len(master_playlists) > 1:
+                    if len(playlists) > 1:
                         output = course_path / lesson_name / f"video_{video_count}"
                     else:
                         saved_single = True
@@ -279,7 +288,7 @@ class PlaywrightDownloadGateway:
                     )
                 idle_since = time.monotonic()
 
-            if saved_single and len(master_playlists) > 1:
+            if saved_single and len(playlists) > 1:
                 single_path = (course_path / lesson_name).with_suffix(".mp4")
                 if single_path.exists():
                     video_dir = course_path / lesson_name

@@ -57,10 +57,8 @@ if (-not (Test-Path -LiteralPath $FfmpegExe)) {
 
 Write-Host "[3/7] Проверяю Firefox для Playwright..."
 $PlaywrightSource = Join-Path $env:LOCALAPPDATA "ms-playwright"
-if (-not (Get-ChildItem -LiteralPath $PlaywrightSource -Directory -Filter "firefox-*" -ErrorAction SilentlyContinue)) {
-    uv run --no-sync playwright install firefox
-    if ($LASTEXITCODE -ne 0) { throw "Playwright не смог установить Firefox" }
-}
+uv run --no-sync playwright install firefox
+if ($LASTEXITCODE -ne 0) { throw "Playwright не смог установить Firefox" }
 
 Write-Host "[4/7] Копирую браузер в resources..."
 $PlaywrightDestination = Join-Path $Resources "ms-playwright"

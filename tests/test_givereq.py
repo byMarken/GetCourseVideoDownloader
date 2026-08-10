@@ -1,8 +1,11 @@
 from getcourse_downloader.infrastructure.media.hls import (
     extract_quality,
     extract_segment_urls,
+    is_hls_master_playlist,
+    is_hls_playlist,
     parse_master_playlist,
     select_quality_url,
+    select_stream_playlist_url,
 )
 from getcourse_downloader.infrastructure.storage.filenames import sanitize_filename
 
@@ -50,6 +53,18 @@ def test_parse_master_playlist_uses_resolution_fallback():
     playlist = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\nstream.m3u8\n"
     qualities = parse_master_playlist(playlist, "https://example.com/master.m3u8")
     assert qualities == {720: "https://example.com/stream.m3u8"}
+
+
+def test_parse_master_playlist_prefers_resolution_over_rutube_path_ids():
+    playlist = (
+        "#EXTM3U\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\n"
+        "https://river.rutube.example/hls-vod/3324/video.mp4.m3u8\n"
+    )
+
+    assert parse_master_playlist(playlist, "https://bl.rutube.example/route/video.m3u8") == {
+        720: "https://river.rutube.example/hls-vod/3324/video.mp4.m3u8"
+    }
 
 
 def test_select_quality_auto_picks_highest():
@@ -109,6 +124,31 @@ def test_parse_master_playlist_empty():
     assert parse_master_playlist("", "https://example.com/master.m3u8") == {}
 
 
+def test_hls_playlist_types_and_stream_selection():
+    media_playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nsegment/00001\n"
+
+    assert is_hls_playlist(MASTER_PLAYLIST)
+    assert is_hls_master_playlist(MASTER_PLAYLIST)
+    assert is_hls_playlist(media_playlist)
+    assert not is_hls_master_playlist(media_playlist)
+    assert (
+        select_stream_playlist_url(
+            MASTER_PLAYLIST,
+            "https://example.com/master.m3u8",
+            "720",
+        )
+        == "https://example.com/720/index.m3u8"
+    )
+    assert (
+        select_stream_playlist_url(
+            media_playlist,
+            "https://river.rutube.ru/video/index.m3u8",
+            "1080",
+        )
+        == "https://river.rutube.ru/video/index.m3u8"
+    )
+
+
 def test_extract_segment_urls_resolves_relative():
     playlist = "#EXTM3U\nseg1.ts\nseg2.bin\n#EXTINF:5,\n"
     urls = extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
@@ -128,3 +168,11 @@ def test_extract_segment_urls_ignores_comments_and_others():
     playlist = "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6,\nseg1.ts\nhttps://other.example.com/a.m3u8\n"
     urls = extract_segment_urls(playlist, "https://cdn.example.com/video/720/index.m3u8")
     assert urls == ["https://cdn.example.com/video/720/seg1.ts"]
+
+
+def test_extract_segment_urls_accepts_extensionless_rutube_segments():
+    playlist = "#EXTM3U\n#EXTINF:6,\nsegment/00001?token=abc\n"
+
+    assert extract_segment_urls(playlist, "https://river.rutube.ru/video/index.m3u8") == [
+        "https://river.rutube.ru/video/segment/00001?token=abc"
+    ]

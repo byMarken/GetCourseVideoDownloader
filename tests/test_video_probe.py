@@ -76,8 +76,10 @@ def test_master_playlist_response_requires_successful_supported_url():
         ok=False,
     )
     unrelated: Any = _FakeResponse("https://rutube.example/poster.jpg")
+    rutube: Any = _FakeResponse("https://bl.rutube.ru/route/video/master.m3u8?token=abc")
 
     assert is_master_playlist_response(supported)
+    assert is_master_playlist_response(rutube)
     assert not is_master_playlist_response(failed)
     assert not is_master_playlist_response(unrelated)
 

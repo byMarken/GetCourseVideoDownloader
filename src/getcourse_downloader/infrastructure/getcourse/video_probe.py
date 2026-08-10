@@ -14,7 +14,7 @@ from getcourse_downloader.domain.events import VideoCheckEvent, VideoCheckStatus
 from getcourse_downloader.domain.models import Course, Lesson
 from getcourse_downloader.infrastructure.getcourse.video_signals import (
     VIDEO_PLAYER_SELECTOR,
-    is_master_playlist_url,
+    is_hls_playlist_url,
 )
 
 PROBE_CONCURRENCY = 4
@@ -29,7 +29,7 @@ class _ProbeResult(Enum):
 
 
 def is_master_playlist_response(response: Response) -> bool:
-    return response.ok and is_master_playlist_url(response.url)
+    return response.ok and is_hls_playlist_url(response.url)
 
 
 class GetCourseVideoProbe:
@@ -142,7 +142,7 @@ class GetCourseVideoProbe:
 
             if self._authentication_required(page):
                 return _ProbeResult.AUTH_REQUIRED
-            if playlist_received.is_set():
+            if playlist_received.is_set() or await self._has_video_player(page):
                 return _ProbeResult.VIDEO
 
             with contextlib.suppress(TimeoutError):

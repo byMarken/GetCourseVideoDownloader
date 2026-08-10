@@ -23,11 +23,18 @@ def test_project_root_frozen(monkeypatch, tmp_path):
 
 def test_app_paths_use_platform_data_and_bundled_resources(monkeypatch, tmp_path):
     user_root = tmp_path / "user-data"
-    monkeypatch.setattr(paths, "user_data_path", lambda *args, **kwargs: user_root)
+    calls = []
+
+    def fake_user_data_path(app_name, appauthor=None, roaming=False):
+        calls.append((app_name, appauthor, roaming))
+        return user_root
+
+    monkeypatch.setattr(paths, "user_data_path", fake_user_data_path)
     discovered = paths.AppPaths.discover()
     assert discovered.data == user_root / "data"
     assert discovered.session == user_root / "browser-profile"
     assert discovered.resources == _PROJECT_ROOT / "resources"
+    assert calls == [(paths.APP_NAME, False, False)]
 
 
 def test_ensure_runtime_directories(monkeypatch, tmp_path):
