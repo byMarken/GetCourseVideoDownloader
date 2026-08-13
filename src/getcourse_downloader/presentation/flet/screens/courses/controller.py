@@ -82,3 +82,6 @@ class CoursesController:
 
     def cancel(self) -> None:
         self._download_lessons.cancel()
+
+    def shutdown(self, timeout: float = 6.0) -> None:
+        self._download_lessons.shutdown(timeout)
