@@ -42,8 +42,10 @@ jobs:
           curl.exe -L --fail -o "$env:RUNNER_TEMP\ffmpeg.zip" "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
           Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg" -Force
           $Ffmpeg = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          if (-not $Ffmpeg) { throw "ffmpeg.exe not found" }
+          $Ffprobe = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if (-not $Ffmpeg -or -not $Ffprobe) { throw "ffmpeg.exe or ffprobe.exe not found" }
           Copy-Item $Ffmpeg.FullName "resources\ffmpeg.exe" -Force
+          Copy-Item $Ffprobe.FullName "resources\ffprobe.exe" -Force
 
       - name: Copy Playwright browser
         shell: pwsh
