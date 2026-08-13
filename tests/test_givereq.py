@@ -24,6 +24,12 @@ def test_sanitize_filename_replaces_illegal_chars():
     assert sanitize_filename('a/b\\c:d*e?f"g<h>i|') == "a_b_c_d_e_f_g_h_i_"
 
 
+def test_sanitize_filename_protects_windows_reserved_names_with_extensions():
+    assert sanitize_filename("CON") == "_CON"
+    assert sanitize_filename("con.txt") == "_con.txt"
+    assert sanitize_filename("LPT1.mp4") == "_LPT1.mp4"
+
+
 def test_extract_quality_from_url():
     assert extract_quality("https://example.com/video/720/index.m3u8") == 720
     assert extract_quality("https://example.com/video/1080/index.m3u8") == 1080

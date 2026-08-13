@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
+import threading
 import time
+from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -13,77 +17,247 @@ from playwright.async_api import async_playwright
 
 from getcourse_downloader.application.ports.download import EventHandler
 from getcourse_downloader.domain.events import DownloadEvent, DownloadEventType
-from getcourse_downloader.domain.models import (
-    DownloadRequest,
-    DownloadSummary,
-    SelectedLesson,
-)
+from getcourse_downloader.domain.models import DownloadRequest, DownloadSummary, SelectedLesson
 from getcourse_downloader.infrastructure.browser.playwright import PlaywrightBrowserFactory
 from getcourse_downloader.infrastructure.getcourse.video_signals import (
+    VIDEO_PLAYER_SELECTOR,
     is_hls_playlist_url,
 )
 from getcourse_downloader.infrastructure.media.hls import (
     HlsDownloader,
+    HlsDownloadStatus,
+    canonical_media_url,
     is_hls_master_playlist,
     is_hls_playlist,
     select_stream_playlist_url,
 )
-from getcourse_downloader.infrastructure.storage.filenames import sanitize_filename
+from getcourse_downloader.infrastructure.storage.download_catalog import (
+    DownloadedMedia,
+    JsonDownloadCatalog,
+)
+from getcourse_downloader.infrastructure.storage.filenames import (
+    collision_safe_component,
+    collision_safe_stem,
+    safe_lesson_output_stem,
+)
+
+PLAYLIST_WAIT_SECONDS = 30.0
+PLAYLIST_QUIET_SECONDS = 1.0
 
 
 class _AuthenticationExpired(RuntimeError):
     pass
 
 
-class PlaywrightDownloadGateway:
-    """In-process worker adapter for GetCourse/Rutube downloads."""
+class _LessonStatus(StrEnum):
+    DOWNLOADED = "downloaded"
+    SKIPPED = "skipped"
+    NO_VIDEO = "no_video"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
-    def __init__(self, browsers: PlaywrightBrowserFactory, hls: HlsDownloader) -> None:
+
+@dataclass(frozen=True, slots=True)
+class _LessonResult:
+    status: _LessonStatus
+    media: tuple[DownloadedMedia, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _Playlist:
+    url: str
+    text: str
+
+
+class PlaywrightDownloadGateway:
+    """Open only selected lessons, detect their streams, and download their media."""
+
+    def __init__(
+        self,
+        browsers: PlaywrightBrowserFactory,
+        hls: HlsDownloader,
+        catalog: JsonDownloadCatalog | None = None,
+    ) -> None:
         self._browsers = browsers
         self._hls = hls
-        self._cancelled = False
+        self._catalog = catalog
+        self._cancelled = threading.Event()
+        self._authentication_continued = threading.Event()
 
     def run(self, request: DownloadRequest, on_event: EventHandler) -> DownloadSummary:
-        self._cancelled = False
+        self._cancelled.clear()
+        self._authentication_continued.clear()
         return asyncio.run(self._run_async(request, on_event))
 
     def continue_authentication(self) -> None:
-        # Authentication input is supplied through the worker process stdin.
-        return None
+        self._authentication_continued.set()
 
     def cancel(self) -> None:
-        self._cancelled = True
+        self._cancelled.set()
+        self._authentication_continued.set()
+
+    def shutdown(self, timeout: float = 6.0) -> None:
+        del timeout
+        self.cancel()
+
+    @staticmethod
+    def _event(
+        item: SelectedLesson,
+        event_type: DownloadEventType,
+        message: str,
+        *,
+        stage: str = "lesson",
+        level: str = "info",
+        quality: str = "",
+    ) -> DownloadEvent:
+        return DownloadEvent(
+            event_type,
+            message=message,
+            stage=stage,
+            lesson=item.lesson.title,
+            lesson_url=item.lesson.url,
+            course_path=item.course_path,
+            quality=quality,
+            level=level,
+        )
+
+    @staticmethod
+    def _quality_label(media: tuple[DownloadedMedia, ...]) -> str:
+        qualities = list(dict.fromkeys(item.quality for item in media if item.quality))
+        return ", ".join(qualities)
+
+    async def _existing_result(
+        self,
+        item: SelectedLesson,
+        output_stem: Path,
+    ) -> _LessonResult | None:
+        if self._catalog:
+            catalogued = self._catalog.find(item.lesson.url, output_stem)
+            if catalogued:
+                return _LessonResult(_LessonStatus.SKIPPED, catalogued)
+
+        direct = output_stem.parent / f"{output_stem.name}.mp4"
+        try:
+            exists = direct.is_file() and direct.stat().st_size > 0
+        except OSError:
+            exists = False
+        if not exists:
+            return None
+        quality = await self._hls.probe_quality(direct)
+        media = (DownloadedMedia(direct, quality),)
+        if self._catalog:
+            self._catalog.save(item.lesson.url, output_stem, media)
+        return _LessonResult(_LessonStatus.SKIPPED, media)
+
+    @staticmethod
+    def _output_exists(stem: Path) -> bool:
+        direct = stem.parent / f"{stem.name}.mp4"
+        return direct.is_file() and direct.stat().st_size > 0
+
+    @staticmethod
+    def _output_stems(request: DownloadRequest) -> list[Path]:
+        initial_stems = [
+            safe_lesson_output_stem(
+                request.save_path,
+                item.course_path,
+                item.lesson.title,
+            )
+            for item in request.lessons
+        ]
+        relative_parts = [list(stem.relative_to(request.save_path).parts) for stem in initial_stems]
+
+        max_course_depth = max((len(item.course_path) for item in request.lessons), default=0)
+        for depth in range(max_course_depth):
+            groups: dict[tuple[tuple[str, ...], str], list[int]] = {}
+            for index, item in enumerate(request.lessons):
+                if depth >= len(item.course_path):
+                    continue
+                key = (
+                    tuple(part.casefold() for part in relative_parts[index][:depth]),
+                    relative_parts[index][depth].casefold(),
+                )
+                groups.setdefault(key, []).append(index)
+            for indexes in groups.values():
+                raw_prefixes = {
+                    request.lessons[index].course_path[: depth + 1] for index in indexes
+                }
+                if len(raw_prefixes) < 2:
+                    continue
+                for index in indexes:
+                    identity = "\x1f".join(request.lessons[index].course_path[: depth + 1])
+                    relative_parts[index][depth] = collision_safe_component(
+                        relative_parts[index][depth],
+                        identity,
+                    )
+
+        stems = [request.save_path.joinpath(*parts) for parts in relative_parts]
+        counts = Counter(str(stem).casefold() for stem in stems)
+        url_counts = Counter(item.lesson.url for item in request.lessons)
+        return [
+            (
+                collision_safe_stem(
+                    stems[index],
+                    item.lesson.url
+                    if url_counts[item.lesson.url] == 1
+                    else f"{item.lesson.url}#{index}",
+                )
+                if counts[str(stems[index]).casefold()] > 1
+                else stems[index]
+            )
+            for index, item in enumerate(request.lessons)
+        ]
 
     async def _run_async(self, request: DownloadRequest, emit: EventHandler) -> DownloadSummary:
-        failed: list[str] = []
         downloaded = 0
+        already_present = 0
+        no_video = 0
+        failed: list[str] = []
+        cancelled = 0
+        output_stems = self._output_stems(request)
 
         async with async_playwright() as playwright:
-            if request.lessons:
-                await self._ensure_authenticated(playwright, request.lessons[0].lesson.url, emit)
+            pending: list[int] = []
+            for index, item in enumerate(request.lessons):
+                if self._cancelled.is_set():
+                    cancelled = len(request.lessons) - index
+                    break
+                existing = await self._existing_result(item, output_stems[index])
+                if existing is None:
+                    pending.append(index)
+                    continue
+                already_present += 1
+                emit(
+                    self._event(
+                        item,
+                        DownloadEventType.LESSON_SKIPPED,
+                        f"Уже скачано: {item.lesson.title}",
+                        level="success",
+                        quality=self._quality_label(existing.media),
+                    )
+                )
 
-            browser = await self._browsers.launch(playwright, headless=True)
+            browser = None
             try:
-                for item in request.lessons:
-                    if self._cancelled:
-                        failed.extend(entry.lesson.title for entry in request.lessons[downloaded:])
+                if pending and not self._cancelled.is_set():
+                    browser = await self._launch_authenticated_context(
+                        playwright,
+                        request.lessons[pending[0]].lesson.url,
+                        emit,
+                    )
+                for pending_position, index in enumerate(pending):
+                    item = request.lessons[index]
+                    if self._cancelled.is_set() or browser is None:
+                        cancelled += len(pending) - pending_position
                         break
 
-                    emit(
-                        DownloadEvent(
-                            DownloadEventType.LESSON_STARTED,
-                            message=f"Загружаю: {item.lesson.title}",
-                            stage="lesson",
-                            lesson=item.lesson.title,
-                        )
-                    )
-                    success = False
+                    emit(self._event(item, DownloadEventType.LESSON_STARTED, "Проверяю урок"))
+                    result = _LessonResult(_LessonStatus.FAILED)
                     for authentication_attempt in range(2):
                         try:
-                            success = await self._download_lesson(
+                            result = await self._download_lesson(
                                 browser,
                                 item,
-                                request.save_path,
+                                output_stems[index],
                                 request.quality.value,
                                 emit,
                             )
@@ -92,59 +266,120 @@ class PlaywrightDownloadGateway:
                             await browser.close()
                             if authentication_attempt:
                                 break
-                            await self._ensure_authenticated(playwright, item.lesson.url, emit)
-                            browser = await self._browsers.launch(playwright, headless=True)
+                            browser = await self._launch_authenticated_context(
+                                playwright,
+                                item.lesson.url,
+                                emit,
+                            )
+                            if browser is None:
+                                result = _LessonResult(_LessonStatus.CANCELLED)
+                                break
 
-                    if success:
+                    if result.status is _LessonStatus.DOWNLOADED:
                         downloaded += 1
                         emit(
-                            DownloadEvent(
+                            self._event(
+                                item,
                                 DownloadEventType.LESSON_COMPLETED,
-                                message=f"Готово: {item.lesson.title}",
-                                stage="lesson",
-                                lesson=item.lesson.title,
+                                f"Готово: {item.lesson.title}",
+                                level="success",
+                                quality=self._quality_label(result.media),
                             )
                         )
+                        if self._catalog:
+                            self._catalog.save(item.lesson.url, output_stems[index], result.media)
+                    elif result.status is _LessonStatus.SKIPPED:
+                        already_present += 1
+                        emit(
+                            self._event(
+                                item,
+                                DownloadEventType.LESSON_SKIPPED,
+                                f"Уже скачано: {item.lesson.title}",
+                                level="success",
+                                quality=self._quality_label(result.media),
+                            )
+                        )
+                        if self._catalog:
+                            self._catalog.save(item.lesson.url, output_stems[index], result.media)
+                    elif result.status is _LessonStatus.NO_VIDEO:
+                        no_video += 1
+                        emit(
+                            self._event(
+                                item,
+                                DownloadEventType.LESSON_NO_VIDEO,
+                                f"Видео не найдено: {item.lesson.title}",
+                                level="warning",
+                            )
+                        )
+                    elif result.status is _LessonStatus.CANCELLED:
+                        cancelled += len(pending) - pending_position
+                        break
                     else:
                         failed.append(item.lesson.title)
                         emit(
-                            DownloadEvent(
+                            self._event(
+                                item,
                                 DownloadEventType.LESSON_FAILED,
-                                message=f"Не удалось скачать: {item.lesson.title}",
-                                stage="lesson",
-                                lesson=item.lesson.title,
+                                f"Не удалось скачать: {item.lesson.title}",
                                 level="error",
                             )
                         )
             finally:
-                with contextlib.suppress(PlaywrightError):
-                    await browser.close()
+                if browser is not None:
+                    with contextlib.suppress(PlaywrightError):
+                        await browser.close()
 
         summary = DownloadSummary(
             total=len(request.lessons),
             downloaded=downloaded,
+            already_present=already_present,
+            no_video=no_video,
             failed=tuple(failed),
+            cancelled=cancelled,
         )
         emit(
             DownloadEvent(
                 DownloadEventType.SUMMARY,
-                message=f"Загружено: {summary.downloaded} из {summary.total}",
+                message=(
+                    f"Загружено: {summary.downloaded}; уже было: {summary.already_present}; "
+                    f"без видео: {summary.no_video}; ошибок: {len(summary.failed)}"
+                ),
                 stage="summary",
-                current=summary.downloaded,
+                current=summary.processed,
                 total=summary.total,
+                downloaded=summary.downloaded,
+                already_present=summary.already_present,
+                no_video=summary.no_video,
+                failed_count=len(summary.failed),
+                cancelled=summary.cancelled,
                 level="success" if summary.successful else "warning",
             )
         )
         return summary
 
-    async def _ensure_authenticated(self, playwright, url: str, emit: EventHandler) -> None:
+    async def _launch_authenticated_context(
+        self,
+        playwright,
+        url: str,
+        emit: EventHandler,
+    ):
         browser = await self._browsers.launch(playwright, headless=True)
         try:
             page = browser.pages[0] if browser.pages else await browser.new_page()
-            await self._open_page(page, url, "страницу для проверки авторизации", emit)
+            opened = await self._open_page(
+                page,
+                url,
+                "страницу для проверки авторизации",
+                emit,
+            )
+            if not opened:
+                await browser.close()
+                return None
             needs_auth = await self._authentication_required(page)
-        finally:
-            await browser.close()
+        except Exception:
+            with contextlib.suppress(PlaywrightError):
+                await browser.close()
+            raise
 
         if not needs_auth:
             emit(
@@ -154,24 +389,40 @@ class PlaywrightDownloadGateway:
                     stage="authentication",
                 )
             )
-            return
+            return browser
 
-        emit(
-            DownloadEvent(
-                DownloadEventType.AUTH_REQUIRED,
-                message="Требуется вход в GetCourse",
-                stage="authentication",
-            )
-        )
-        await asyncio.sleep(5)
+        await browser.close()
+
         browser = await self._browsers.launch(playwright, headless=False)
         try:
             page = browser.pages[0] if browser.pages else await browser.new_page()
-            await self._open_page(page, url, "страницу входа", emit)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, input)
+            if not await self._open_page(page, url, "страницу входа", emit):
+                return None
+            while True:
+                self._authentication_continued.clear()
+                emit(
+                    DownloadEvent(
+                        DownloadEventType.AUTH_REQUIRED,
+                        message="Войдите в GetCourse и нажмите «Продолжить»",
+                        stage="authentication",
+                    )
+                )
+                await asyncio.to_thread(self._authentication_continued.wait)
+                if self._cancelled.is_set():
+                    return None
+                if not await self._open_page(
+                    page,
+                    url,
+                    "страницу для проверки авторизации",
+                    emit,
+                ):
+                    return None
+                if not await self._authentication_required(page):
+                    break
         finally:
             await browser.close()
+        if self._cancelled.is_set():
+            return None
         emit(
             DownloadEvent(
                 DownloadEventType.AUTHENTICATED,
@@ -180,124 +431,150 @@ class PlaywrightDownloadGateway:
                 level="success",
             )
         )
+        return await self._browsers.launch(playwright, headless=True)
 
     async def _download_lesson(
         self,
         browser,
         item: SelectedLesson,
-        save_root: Path,
+        output_stem: Path,
         quality: str,
         emit: EventHandler,
-    ) -> bool:
+    ) -> _LessonResult:
+        existing = await self._existing_result(item, output_stem)
+        if existing is not None:
+            return existing
+
         page = await browser.new_page()
-        playlist_urls_seen: set[str] = set()
-        master_playlists: list[tuple[str, str]] = []
-        media_playlists: list[tuple[str, str]] = []
+        playlists: dict[str, _Playlist] = {}
+        response_tasks: set[asyncio.Task[None]] = set()
+        last_playlist_at = 0.0
 
         async def on_response(response) -> None:
+            nonlocal last_playlist_at
             url = response.url
-            if not is_hls_playlist_url(url) or url in playlist_urls_seen:
+            if not is_hls_playlist_url(url) or url in playlists:
                 return
-            playlist_urls_seen.add(url)
             try:
                 text = await asyncio.wait_for(response.text(), timeout=15)
-                if is_hls_master_playlist(text):
-                    master_playlists.append((url, text))
-                elif is_hls_playlist(text):
-                    media_playlists.append((url, text))
             except Exception:
                 return
+            if is_hls_master_playlist(text) or is_hls_playlist(text):
+                playlists[url] = _Playlist(url, text)
+                last_playlist_at = time.monotonic()
 
-        page.on("response", lambda response: asyncio.create_task(on_response(response)))
+        def schedule_response(response) -> None:
+            task = asyncio.create_task(on_response(response))
+            response_tasks.add(task)
+            task.add_done_callback(response_tasks.discard)
+
+        page.on("response", schedule_response)
 
         try:
-            await self._open_page(page, item.lesson.url, "страницу урока", emit)
+            if not await self._open_page(
+                page,
+                item.lesson.url,
+                "страницу урока",
+                emit,
+                item=item,
+            ):
+                return _LessonResult(_LessonStatus.CANCELLED)
             if await self._authentication_required(page):
                 raise _AuthenticationExpired
 
-            emit(
-                DownloadEvent(
-                    DownloadEventType.LOG,
-                    message="Получаю master playlist",
-                    stage="playlist",
-                    lesson=item.lesson.title,
-                )
-            )
+            player_present = await self._has_supported_player(page)
             started_at = time.monotonic()
-            while (
-                not master_playlists and not media_playlists and time.monotonic() - started_at < 30
-            ):
-                if self._cancelled:
-                    return False
-                await asyncio.sleep(0.5)
+            while time.monotonic() - started_at < PLAYLIST_WAIT_SECONDS:
+                if self._cancelled.is_set():
+                    return _LessonResult(_LessonStatus.CANCELLED)
+                if playlists and time.monotonic() - last_playlist_at >= PLAYLIST_QUIET_SECONDS:
+                    break
+                await asyncio.sleep(0.25)
 
-            if not master_playlists and not media_playlists:
+            if response_tasks:
+                await asyncio.gather(*tuple(response_tasks), return_exceptions=True)
+
+            if not playlists:
+                player_present = player_present or await self._has_supported_player(page)
+                if player_present:
+                    emit(
+                        self._event(
+                            item,
+                            DownloadEventType.ERROR,
+                            "Плеер найден, но видеопоток не получен",
+                            stage="playlist",
+                            level="error",
+                        )
+                    )
+                    return _LessonResult(_LessonStatus.FAILED)
+                return _LessonResult(_LessonStatus.NO_VIDEO)
+
+            selected = self._select_playlist_urls(playlists.values(), quality)
+
+            if not selected:
                 emit(
-                    DownloadEvent(
+                    self._event(
+                        item,
                         DownloadEventType.ERROR,
-                        message="HLS playlist не получен",
-                        stage="playlist",
-                        lesson=item.lesson.title,
+                        "Не удалось подобрать качество видео",
+                        stage="quality",
+                        level="error",
                     )
                 )
-                return False
+                return _LessonResult(_LessonStatus.FAILED)
 
-            await asyncio.sleep(0.5)
-            playlists = master_playlists if master_playlists else media_playlists
+            download_results = []
+            for video_index, playlist_url in enumerate(selected, start=1):
+                output = output_stem if len(selected) == 1 else output_stem / f"video_{video_index}"
+                result = await self._hls.download(
+                    playlist_url,
+                    output,
+                    item.lesson.title,
+                    emit,
+                    lesson_url=item.lesson.url,
+                    course_path=item.course_path,
+                    requested_quality=quality,
+                    video_index=video_index,
+                    video_total=len(selected),
+                    is_cancelled=self._cancelled.is_set,
+                )
+                download_results.append(result)
+                if result.status is HlsDownloadStatus.CANCELLED or self._cancelled.is_set():
+                    return _LessonResult(_LessonStatus.CANCELLED)
 
-            course_path = save_root / sanitize_filename(item.course_title, fallback="course")
-            lesson_name = sanitize_filename(item.lesson.title)
-            processed: set[str] = set()
-            downloaded = False
-            video_count = 0
-            saved_single = False
-            idle_since = time.monotonic()
-
-            while True:
-                pending = [(url, text) for url, text in playlists if url not in processed]
-                if not pending:
-                    if time.monotonic() - idle_since >= 5:
-                        break
-                    await asyncio.sleep(0.5)
-                    continue
-
-                for master_url, master_text in pending:
-                    processed.add(master_url)
-                    video_count += 1
-                    selected_url = select_stream_playlist_url(master_text, master_url, quality)
-                    if not selected_url:
-                        emit(
-                            DownloadEvent(
-                                DownloadEventType.ERROR,
-                                message="Не удалось подобрать качество",
-                                stage="quality",
-                                lesson=item.lesson.title,
-                            )
-                        )
-                        continue
-
-                    if len(playlists) > 1:
-                        output = course_path / lesson_name / f"video_{video_count}"
-                    else:
-                        saved_single = True
-                        output = course_path / lesson_name
-
-                    downloaded = (
-                        await self._hls.download(selected_url, output, item.lesson.title, emit)
-                        or downloaded
-                    )
-                idle_since = time.monotonic()
-
-            if saved_single and len(playlists) > 1:
-                single_path = (course_path / lesson_name).with_suffix(".mp4")
-                if single_path.exists():
-                    video_dir = course_path / lesson_name
-                    video_dir.mkdir(parents=True, exist_ok=True)
-                    os.replace(single_path, video_dir / "video_1.mp4")
-            return downloaded
+            statuses = [result.status for result in download_results]
+            if any(status is HlsDownloadStatus.FAILED for status in statuses):
+                return _LessonResult(_LessonStatus.FAILED)
+            media = tuple(
+                DownloadedMedia(result.output_path, result.quality)
+                for result in download_results
+                if result.output_path is not None
+            )
+            if all(status is HlsDownloadStatus.ALREADY_PRESENT for status in statuses):
+                return _LessonResult(_LessonStatus.SKIPPED, media)
+            return _LessonResult(_LessonStatus.DOWNLOADED, media)
         finally:
+            for task in response_tasks:
+                task.cancel()
+            if response_tasks:
+                await asyncio.gather(*tuple(response_tasks), return_exceptions=True)
             with contextlib.suppress(PlaywrightError):
                 await page.close()
+
+    @staticmethod
+    def _select_playlist_urls(playlists: Iterable[_Playlist], quality: str) -> list[str]:
+        selected: dict[str, str] = {}
+        for playlist in playlists:
+            selected_url = select_stream_playlist_url(playlist.text, playlist.url, quality)
+            if selected_url:
+                selected.setdefault(canonical_media_url(selected_url), selected_url)
+        return [selected[key] for key in sorted(selected)]
+
+    @staticmethod
+    async def _has_supported_player(page: Any) -> bool:
+        with contextlib.suppress(PlaywrightError):
+            return await page.query_selector(VIDEO_PLAYER_SELECTOR) is not None
+        return False
 
     @staticmethod
     async def _authentication_required(page: Any) -> bool:
@@ -307,33 +584,62 @@ class PlaywrightDownloadGateway:
         current_url = page.url.lower()
         return "login" in current_url or "required=true" in current_url
 
-    @staticmethod
+    async def _goto_or_cancel(self, page: Any, url: str) -> bool:
+        navigation = asyncio.create_task(page.goto(url, wait_until="commit", timeout=60_000))
+        try:
+            while not navigation.done():
+                if self._cancelled.is_set():
+                    navigation.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, PlaywrightError):
+                        await navigation
+                    return False
+                await asyncio.sleep(0.1)
+            await navigation
+            return True
+        except asyncio.CancelledError:
+            navigation.cancel()
+            with contextlib.suppress(asyncio.CancelledError, PlaywrightError):
+                await navigation
+            raise
+
     async def _open_page(
+        self,
         page: Any,
         url: str,
         purpose: str,
         emit: EventHandler,
         attempts: int = 3,
-    ) -> None:
+        *,
+        item: SelectedLesson | None = None,
+    ) -> bool:
         last_error: PlaywrightError | None = None
         for attempt in range(1, attempts + 1):
             try:
-                await page.goto(url, wait_until="commit", timeout=60_000)
-                return
+                return await self._goto_or_cancel(page, url)
             except (PlaywrightTimeoutError, PlaywrightError) as error:
                 last_error = error
+                if self._cancelled.is_set():
+                    return False
                 if attempt < attempts:
-                    emit(
-                        DownloadEvent(
+                    event = DownloadEvent(
+                        DownloadEventType.LOG,
+                        message=f"Не удалось открыть {purpose}. Повтор {attempt}/{attempts - 1}",
+                        stage="network",
+                        level="warning",
+                    )
+                    if item:
+                        event = self._event(
+                            item,
                             DownloadEventType.LOG,
-                            message=(
-                                f"Не удалось открыть {purpose}. Повтор {attempt}/{attempts - 1}"
-                            ),
+                            event.message,
                             stage="network",
                             level="warning",
                         )
-                    )
-                    await asyncio.sleep(attempt * 3)
+                    emit(event)
+                    for _ in range(attempt * 30):
+                        if self._cancelled.is_set():
+                            return False
+                        await asyncio.sleep(0.1)
         raise RuntimeError(
             "Не удалось открыть страницу: сайт не отвечает. Проверьте интернет и повторите."
         ) from last_error
