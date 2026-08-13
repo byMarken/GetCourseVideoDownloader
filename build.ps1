@@ -33,7 +33,8 @@ New-Item -ItemType Directory -Force -Path $Resources | Out-Null
 
 Write-Host "[2/7] Проверяю FFmpeg..."
 $FfmpegExe = Join-Path $Resources "ffmpeg.exe"
-if (-not (Test-Path -LiteralPath $FfmpegExe)) {
+$FfprobeExe = Join-Path $Resources "ffprobe.exe"
+if (-not (Test-Path -LiteralPath $FfmpegExe) -or -not (Test-Path -LiteralPath $FfprobeExe)) {
     $TempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
     $Extract = Join-Path $TempRoot ("gcd-ffmpeg-" + [guid]::NewGuid().ToString("N"))
     $Archive = Join-Path $TempRoot ("gcd-ffmpeg-" + [guid]::NewGuid().ToString("N") + ".zip")
@@ -43,9 +44,13 @@ if (-not (Test-Path -LiteralPath $FfmpegExe)) {
         curl.exe -L --fail -o $Archive "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
         if ($LASTEXITCODE -ne 0) { throw "Не удалось скачать FFmpeg" }
         Expand-Archive -LiteralPath $Archive -DestinationPath $Extract -Force
-        $Found = Get-ChildItem -LiteralPath $Extract -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-        if (-not $Found) { throw "ffmpeg.exe отсутствует в загруженном архиве" }
-        Copy-Item -LiteralPath $Found.FullName -Destination $FfmpegExe -Force
+        $FoundFfmpeg = Get-ChildItem -LiteralPath $Extract -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        $FoundFfprobe = Get-ChildItem -LiteralPath $Extract -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+        if (-not $FoundFfmpeg -or -not $FoundFfprobe) {
+            throw "ffmpeg.exe или ffprobe.exe отсутствует в загруженном архиве"
+        }
+        Copy-Item -LiteralPath $FoundFfmpeg.FullName -Destination $FfmpegExe -Force
+        Copy-Item -LiteralPath $FoundFfprobe.FullName -Destination $FfprobeExe -Force
     } finally {
         if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
         $ResolvedExtract = [System.IO.Path]::GetFullPath($Extract)
@@ -71,7 +76,7 @@ Write-Host "[5/7] Собираю Windows-приложение..."
 uv run --no-sync flet pack main.py -y -D -n $AppName `
     --product-name "GetCourse Video Downloader" `
     --file-description "Загрузка видео с GetCourse" `
-    --company-name "Mark Pekun" `
+    --company-name "GetCourseVideoDownloader" `
     --product-version $Version `
     --file-version $FileVersion
 if ($LASTEXITCODE -ne 0) { throw "flet pack завершился с ошибкой ($LASTEXITCODE)" }

@@ -1,5 +1,7 @@
 __pycache__/
+*.egg-info/
 .pytest_cache/
+.pytest-tmp*/
 .mypy_cache/
 .ruff_cache/
 .uv-cache/
