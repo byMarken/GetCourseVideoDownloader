@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from getcourse_downloader.infrastructure.platform.paths import AppPaths
@@ -23,7 +25,19 @@ class FfmpegMuxer:
             "ffmpeg не найден. Установите его в PATH или поместите ffmpeg.exe в resources/."
         )
 
-    async def mux(self, source: Path, destination: Path) -> tuple[bool, str]:
+    def probe_executable(self) -> str | None:
+        bundled = self._paths.resources / "ffprobe.exe"
+        if bundled.is_file():
+            return str(bundled.resolve())
+        return shutil.which("ffprobe")
+
+    async def mux(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[bool, str]:
         flags = getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         process = await asyncio.create_subprocess_exec(
             self.executable(),
@@ -39,12 +53,62 @@ class FfmpegMuxer:
             stderr=asyncio.subprocess.PIPE,
             creationflags=flags,
         )
+        communicate = asyncio.create_task(process.communicate())
+        started_at = asyncio.get_running_loop().time()
+        while not communicate.done():
+            if is_cancelled and is_cancelled():
+                process.kill()
+                await process.wait()
+                communicate.cancel()
+                return False, "cancelled"
+            if asyncio.get_running_loop().time() - started_at >= 300:
+                process.kill()
+                await process.wait()
+                communicate.cancel()
+                return False, "ffmpeg завис (таймаут 5 минут)"
+            await asyncio.sleep(0.1)
         try:
-            _, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
-        except TimeoutError:
+            _, stderr = await communicate
+        except asyncio.CancelledError:
             process.kill()
             await process.wait()
-            return False, "ffmpeg завис (таймаут 5 минут)"
+            raise
         if process.returncode != 0:
             return False, stderr.decode("utf-8", errors="replace")[-300:]
         return True, ""
+
+    async def probe_height(self, media: Path) -> int | None:
+        executable = self.probe_executable()
+        if not executable:
+            return None
+        flags = getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=height",
+            "-of",
+            "json",
+            str(media),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=flags,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return None
+        if process.returncode != 0:
+            return None
+        try:
+            payload = json.loads(stdout.decode("utf-8", errors="replace"))
+            streams = payload.get("streams", [])
+            height = streams[0].get("height") if streams else None
+            return height if isinstance(height, int) and height > 0 else None
+        except (AttributeError, IndexError, json.JSONDecodeError):
+            return None
