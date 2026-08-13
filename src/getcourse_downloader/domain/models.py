@@ -47,28 +47,43 @@ class Lesson:
 @dataclass(frozen=True, slots=True)
 class Course:
     title: str
-    lessons: tuple[Lesson, ...]
+    lessons: tuple[Lesson, ...] = ()
+    url: str = ""
+    children: tuple[Course, ...] = ()
+
+    @property
+    def lesson_count(self) -> int:
+        return len(self.lessons) + sum(child.lesson_count for child in self.children)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Course:
         raw_lessons = data.get("lessons", [])
+        raw_children = data.get("children", [])
         if not isinstance(raw_lessons, list):
             raise InvalidDataError("Поле 'lessons' должно быть списком")
+        if not isinstance(raw_children, list):
+            raise InvalidDataError("Поле 'children' должно быть списком")
         return cls(
-            title=_required_text(data, "course_title"),
+            title=_required_text(data, "title"),
             lessons=tuple(Lesson.from_dict(item) for item in raw_lessons if isinstance(item, dict)),
+            url=_required_text(data, "url"),
+            children=tuple(
+                Course.from_dict(item) for item in raw_children if isinstance(item, dict)
+            ),
         )
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "course_title": self.title,
+            "title": self.title,
+            "url": self.url,
             "lessons": [lesson.to_dict() for lesson in self.lessons],
+            "children": [child.to_dict() for child in self.children],
         }
 
 
 @dataclass(frozen=True, slots=True)
 class SelectedLesson:
-    course_title: str
+    course_path: tuple[str, ...]
     lesson: Lesson
 
     @classmethod
@@ -76,13 +91,16 @@ class SelectedLesson:
         raw_lesson = data.get("lesson")
         if not isinstance(raw_lesson, dict):
             raise InvalidDataError("Поле 'lesson' должно быть объектом")
-        return cls(
-            course_title=_required_text(data, "course_title"),
-            lesson=Lesson.from_dict(raw_lesson),
-        )
+        raw_path = data.get("course_path")
+        if not isinstance(raw_path, list) or not raw_path:
+            raise InvalidDataError("Поле 'course_path' должно быть непустым списком")
+        path = tuple(part.strip() for part in raw_path if isinstance(part, str) and part.strip())
+        if len(path) != len(raw_path):
+            raise InvalidDataError("Все элементы 'course_path' должны быть непустыми строками")
+        return cls(course_path=path, lesson=Lesson.from_dict(raw_lesson))
 
     def to_dict(self) -> dict[str, object]:
-        return {"course_title": self.course_title, "lesson": self.lesson.to_dict()}
+        return {"course_path": list(self.course_path), "lesson": self.lesson.to_dict()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +111,8 @@ class DownloadRequest:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> DownloadRequest:
+        if data.get("schema_version") != 2:
+            raise InvalidDataError("Поддерживается только schema_version=2")
         raw_lessons = data.get("lessons")
         if not isinstance(raw_lessons, list):
             raise InvalidDataError("Поле 'lessons' должно быть списком")
@@ -106,7 +126,7 @@ class DownloadRequest:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "lessons": [item.to_dict() for item in self.lessons],
             "quality": self.quality.value,
             "save_path": str(self.save_path),
@@ -117,11 +137,18 @@ class DownloadRequest:
 class DownloadSummary:
     total: int
     downloaded: int
+    already_present: int = 0
+    no_video: int = 0
     failed: tuple[str, ...] = ()
+    cancelled: int = 0
+
+    @property
+    def processed(self) -> int:
+        return self.downloaded + self.already_present + self.no_video + len(self.failed)
 
     @property
     def successful(self) -> bool:
-        return self.total == self.downloaded and not self.failed
+        return self.processed == self.total and not self.failed and not self.cancelled
 
 
 @dataclass(frozen=True, slots=True)

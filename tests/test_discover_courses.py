@@ -39,6 +39,7 @@ def test_successful_discovery_is_saved():
         Course(
             title="Курс",
             lessons=(Lesson(title="Урок", url="https://school.example/lesson/1"),),
+            url="https://school.example/stream/1",
         )
     ]
     repository = _Repository()
