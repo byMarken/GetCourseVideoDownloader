@@ -47,15 +47,22 @@ class JsonCourseRepository:
         if not self._path.is_file():
             return []
         payload = _read_json(self._path)
-        if isinstance(payload, dict):
-            payload = payload.get("courses", [])
-        if not isinstance(payload, list):
+        if not isinstance(payload, dict) or payload.get("schema_version") != 2:
+            return []
+        raw_courses = payload.get("courses")
+        if not isinstance(raw_courses, list):
             raise InvalidDataError("Файл courses.json должен содержать список курсов")
-        courses = [Course.from_dict(item) for item in payload if isinstance(item, dict)]
+        courses = [Course.from_dict(item) for item in raw_courses if isinstance(item, dict)]
         return courses
 
     def save(self, courses: Sequence[Course]) -> None:
-        _write_json_atomic(self._path, [course.to_dict() for course in courses])
+        _write_json_atomic(
+            self._path,
+            {
+                "schema_version": 2,
+                "courses": [course.to_dict() for course in courses],
+            },
+        )
 
     def has_courses(self) -> bool:
         try:

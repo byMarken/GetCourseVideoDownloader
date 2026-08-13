@@ -43,6 +43,14 @@ class AppPaths:
     def settings_file(self) -> Path:
         return self.data / "settings.json"
 
+    @property
+    def downloads_file(self) -> Path:
+        return self.data / "downloads.json"
+
+    @property
+    def worker_log_file(self) -> Path:
+        return self.data / "worker.log"
+
     def ensure_runtime_directories(self) -> None:
         self.data.mkdir(parents=True, exist_ok=True)
         self.session.mkdir(parents=True, exist_ok=True)
