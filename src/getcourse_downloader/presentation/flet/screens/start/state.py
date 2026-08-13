@@ -5,5 +5,4 @@ from dataclasses import dataclass
 class StartViewState:
     parse_running: bool = False
     discovery_visible: bool = False
-    video_check_visible: bool = False
     total_parsed: int = 0

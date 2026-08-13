@@ -1,11 +1,12 @@
 import asyncio
+import concurrent.futures
 import contextlib
 from collections.abc import Awaitable, Callable
 from typing import ClassVar, TypedDict
 
 import flet as ft
 
-from getcourse_downloader.domain.events import VideoCheckEvent, VideoCheckStatus
+from getcourse_downloader.application.ports.discovery import CourseDiscoveryUpdate
 from getcourse_downloader.presentation.flet.screens.start.controller import StartController
 from getcourse_downloader.presentation.flet.screens.start.state import StartViewState
 from getcourse_downloader.presentation.flet.theme import (
@@ -16,6 +17,8 @@ from getcourse_downloader.presentation.flet.theme import (
     body_text,
     divider,
 )
+
+_DISCOVERY_SCROLL_DELAY_SECONDS = 0.55
 
 
 class _DecorationCircle(TypedDict, total=False):
@@ -88,7 +91,8 @@ class StartScreen:
             height=28,
         )
 
-        self._discovery_list = ft.Column(spacing=4)
+        self._discovery_list = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
+        self._discovery_updates: dict[str, CourseDiscoveryUpdate] = {}
         self._discovery_counter = ft.Text(
             "",
             size=13,
@@ -96,25 +100,11 @@ class StartScreen:
             weight=ft.FontWeight.W_500,
             text_align=ft.TextAlign.CENTER,
         )
-        self._video_check_list = ft.Column(
-            spacing=5,
-            scroll=ft.ScrollMode.AUTO,
-            auto_scroll=False,
-        )
-        self._video_check_counter = ft.Text(
-            "",
-            size=13,
-            color=Color.ACCENT_LIGHT,
-            weight=ft.FontWeight.W_600,
-            text_align=ft.TextAlign.CENTER,
-        )
-        self._video_check_rows: dict[
-            str,
-            tuple[ft.Container, ft.Text, ft.Text, ft.Container],
-        ] = {}
-
         self._loading_task: asyncio.Task | None = None
         self._dot_task: asyncio.Task | None = None
+        self._discovery_scroll_task: asyncio.Task[None] | None = None
+        self._pending_discovery_scroll_url: str | None = None
+        self._parse_task: concurrent.futures.Future | None = None
 
         self.loader = ft.Container(
             visible=False,
@@ -392,7 +382,29 @@ class StartScreen:
 
     def _show_course_discovery(self) -> None:
         self._stop_all_animations()
-        self._discovery_list.controls.clear()
+        self._discovery_list.controls = [
+            ft.Container(
+                padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                border_radius=8,
+                bgcolor="rgba(124,58,237,0.08)",
+                content=ft.Row(
+                    spacing=8,
+                    controls=[
+                        ft.Icon(
+                            ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                            size=15,
+                            color=Color.ACCENT_LIGHT,
+                        ),
+                        ft.Text(
+                            "Открываем страницу и ищем первые папки…",
+                            size=12,
+                            color=Color.TEXT_SECONDARY,
+                        ),
+                    ],
+                ),
+            )
+        ]
+        self._discovery_updates.clear()
         self._discovery_counter.value = ""
         self.state.total_parsed = 0
 
@@ -448,173 +460,75 @@ class StartScreen:
             ),
         )
 
-    def _show_video_check(self) -> None:
-        self._stop_all_animations()
-        self._video_check_list.controls.clear()
-        self._video_check_rows.clear()
-        self._video_check_counter.value = "Подготавливаем проверку..."
-
-        self.loader.content = ft.Container(
-            expand=True,
-            alignment=ft.Alignment(0, 0),
-            content=ft.Container(
-                width=420,
-                padding=ft.Padding.symmetric(horizontal=20, vertical=18),
-                border_radius=18,
-                bgcolor=Color.BG_CARD,
-                border=ft.Border.all(1, Color.BORDER),
-                gradient=Gradient.CARD,
-                shadow=Shadow.CARD_ELEVATED,
-                content=ft.Column(
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=8,
-                    controls=[
-                        ft.Container(
-                            width=38,
-                            height=38,
-                            border_radius=11,
-                            gradient=Gradient.ACCENT,
-                            content=ft.Icon(
-                                ft.Icons.VIDEO_LIBRARY_ROUNDED,
-                                size=20,
-                                color=Color.TEXT,
-                            ),
-                        ),
-                        ft.Text(
-                            "Проверяем уроки",
-                            size=17,
-                            weight=ft.FontWeight.W_700,
-                            color=Color.TEXT,
-                        ),
-                        ft.Text(
-                            "Оставляем только уроки с видео",
-                            size=12,
-                            color=Color.TEXT_SECONDARY,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-                        divider(),
-                        ft.Container(
-                            content=self._video_check_list,
-                            height=220,
-                            border_radius=10,
-                            bgcolor="rgba(0,0,0,0.15)",
-                            padding=ft.Padding.symmetric(horizontal=10, vertical=8),
-                        ),
-                        self._video_check_counter,
-                    ],
-                ),
-            ),
-        )
-
-    async def _on_video_check(self, event: VideoCheckEvent) -> None:
-        if not self.state.video_check_visible:
-            self.state.video_check_visible = True
-            self._show_video_check()
-
-        row_controls = self._video_check_rows.get(event.lesson_url)
-        if row_controls is None:
-            status_holder = ft.Container(
-                width=20,
-                height=20,
-                alignment=ft.Alignment(0, 0),
-                content=ft.ProgressRing(
-                    width=14,
-                    height=14,
-                    stroke_width=2,
-                    color=Color.ACCENT_LIGHT,
-                ),
-            )
-            title = ft.Text(
-                event.lesson_title,
-                size=12,
-                color=Color.TEXT,
-                expand=True,
-                max_lines=1,
-                overflow=ft.TextOverflow.ELLIPSIS,
-            )
-            status = ft.Text(
-                "Проверка...",
-                size=11,
-                color=Color.TEXT_MUTED,
-                width=72,
-                text_align=ft.TextAlign.RIGHT,
-            )
-            row = ft.Container(
-                padding=ft.Padding.symmetric(horizontal=8, vertical=6),
-                border_radius=7,
-                bgcolor="rgba(255,255,255,0.03)",
-                opacity=0,
-                offset=ft.Offset(0, 0.12),
-                animate_opacity=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
-                animate_offset=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
-                content=ft.Row(
-                    controls=[status_holder, title, status],
-                    spacing=8,
-                ),
-            )
-            self._video_check_list.controls.append(row)
-            row_controls = (status_holder, title, status, row)
-            self._video_check_rows[event.lesson_url] = row_controls
-            self.page.update()
-            await asyncio.sleep(0.06)
-            row.opacity = 1
-            row.offset = ft.Offset(0, 0)
-            self.page.update()
-            if len(self._video_check_list.controls) > 5:
-                with contextlib.suppress(Exception):
-                    await self._video_check_list.scroll_to(
-                        offset=-1,
-                        duration=220,
-                        curve=ft.AnimationCurve.EASE_OUT,
-                    )
-
-        status_holder, title, status, _ = row_controls
-        if event.status is VideoCheckStatus.VIDEO:
-            status_holder.content = ft.Icon(
-                ft.Icons.CHECK_CIRCLE_ROUNDED,
-                size=17,
-                color=Color.GREEN,
-            )
-            title.color = Color.TEXT
-            status.value = "Есть видео"
-            status.color = Color.GREEN
-        elif event.status is VideoCheckStatus.NO_VIDEO:
-            status_holder.content = ft.Icon(
-                ft.Icons.CANCEL_ROUNDED,
-                size=17,
-                color=Color.RED,
-            )
-            title.color = Color.TEXT_MUTED
-            status.value = "Нет видео"
-            status.color = Color.RED
-
-        self._video_check_counter.value = (
-            f"Проверено {event.checked}/{event.total}  •  С видео {event.video_count}"
-        )
-        self.page.update()
-
-    async def _on_course_parsed(self, title: str, lesson_count: int) -> None:
-        if self.state.video_check_visible:
-            return
+    async def _on_course_parsed(self, update: CourseDiscoveryUpdate) -> None:
         if not self.state.discovery_visible:
             self.state.discovery_visible = True
             self._show_course_discovery()
             self.page.update()
-        self.state.total_parsed += 1
-        _MAX_VISIBLE = 4
+        previous = self._discovery_updates.get(update.url)
+        self._discovery_updates[update.url] = update
+        self.state.total_parsed = len(self._discovery_updates)
+        self._discovery_list.controls = [
+            self._build_discovery_card(item) for item in self._discovery_updates.values()
+        ]
+        loaded = sum(item.loaded for item in self._discovery_updates.values())
+        self._discovery_counter.value = (
+            f"Найдено папок: {self.state.total_parsed} · обработано: {loaded}"
+        )
+        self.page.update()
+        if update.loaded and (previous is None or not previous.loaded):
+            self._schedule_discovery_scroll(update.url)
 
-        card = ft.Container(
+    async def _scroll_discovery_to(self, course_url: str) -> None:
+        try:
+            await self._discovery_list.scroll_to(
+                scroll_key=course_url,
+                duration=650,
+                curve=ft.AnimationCurve.EASE_IN_OUT_CUBIC,
+            )
+        except (asyncio.CancelledError, IndexError, RuntimeError):
+            return
+
+    def _schedule_discovery_scroll(self, course_url: str) -> None:
+        self._pending_discovery_scroll_url = course_url
+        if self._discovery_scroll_task is None or self._discovery_scroll_task.done():
+            self._discovery_scroll_task = asyncio.create_task(self._drain_discovery_scrolls())
+
+    async def _drain_discovery_scrolls(self) -> None:
+        try:
+            while self._pending_discovery_scroll_url is not None:
+                await asyncio.sleep(_DISCOVERY_SCROLL_DELAY_SECONDS)
+                course_url = self._pending_discovery_scroll_url
+                self._pending_discovery_scroll_url = None
+                await self._scroll_discovery_to(course_url)
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._discovery_scroll_task = None
+
+    @staticmethod
+    def _build_discovery_card(update: CourseDiscoveryUpdate) -> ft.Container:
+        return ft.Container(
+            key=ft.ScrollKey(update.url),  # type: ignore[call-arg]
             padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             border_radius=8,
             bgcolor="rgba(124,58,237,0.08)",
-            animate_opacity=ft.Animation(200, ft.AnimationCurve.EASE_IN),
-            opacity=0,
             content=ft.Row(
                 controls=[
-                    ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=14, color=Color.GREEN),
-                    ft.Text(title, size=12, color=Color.TEXT, expand=True),
+                    ft.Icon(
+                        ft.Icons.CHECK_CIRCLE_OUTLINE
+                        if update.loaded
+                        else ft.Icons.SCHEDULE_ROUNDED,
+                        size=14,
+                        color=Color.GREEN if update.loaded else Color.ACCENT_LIGHT,
+                    ),
+                    ft.Text(update.title, size=12, color=Color.TEXT, expand=True),
                     ft.Container(
-                        content=ft.Text(f"{lesson_count} ур.", size=11, color=Color.TEXT_MUTED),
+                        content=ft.Text(
+                            f"{update.lesson_count} ур." if update.loaded else "в очереди",
+                            size=11,
+                            color=Color.TEXT_MUTED,
+                        ),
                         padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         border_radius=4,
                         bgcolor="rgba(255,255,255,0.05)",
@@ -623,17 +537,6 @@ class StartScreen:
                 spacing=8,
             ),
         )
-
-        self._discovery_list.controls.append(card)
-
-        if len(self._discovery_list.controls) > _MAX_VISIBLE:
-            self._discovery_list.controls.pop(0)
-
-        self._discovery_counter.value = f"Найдено {self.state.total_parsed} курсов"
-        self.page.update()
-        await asyncio.sleep(0.05)
-        card.opacity = 1
-        self.page.update()
 
     def _show_auth_error(self, message: str) -> None:
         self._auth_error.value = message
@@ -647,6 +550,10 @@ class StartScreen:
         if self._dot_task is not None:
             self._dot_task.cancel()
             self._dot_task = None
+        if self._discovery_scroll_task is not None:
+            self._discovery_scroll_task.cancel()
+            self._discovery_scroll_task = None
+        self._pending_discovery_scroll_url = None
 
     def _start_text_animation(self, target: ft.Text, base_text: str) -> None:
         if self._loading_task is not None:
@@ -695,16 +602,12 @@ class StartScreen:
 
         self.state.parse_running = True
         self.state.discovery_visible = False
-        self.state.video_check_visible = False
         self.state.total_parsed = 0
         self.loader.visible = True
-        self._show_simple_overlay(
-            "Ищем курсы и проверяем видео",
-            "Первый поиск может занять 1–2 минуты",
-        )
-        self._start_dot_animation()
+        self.state.discovery_visible = True
+        self._show_course_discovery()
         self.page.update()
-        self.page.run_task(self._parse_async, url)
+        self._parse_task = self.page.run_task(self._parse_async, url)
 
     def _on_auth_ready(self, e) -> None:
         self._auth_event.set()
@@ -731,17 +634,16 @@ class StartScreen:
                 url,
                 on_auth_required=self._wait_for_authentication,
                 on_course_discovered=self._on_course_parsed,
-                on_video_check=self._on_video_check,
             )
             self._stop_all_animations()
             self.loader.visible = False
+            self._parse_task = None
             await self._on_courses_ready()
 
         except Exception as ex:
             self._stop_all_animations()
             self.state.parse_running = False
             self.state.discovery_visible = False
-            self.state.video_check_visible = False
             self.loader.visible = False
             self.page.update()
             self._show_error(str(ex))
@@ -764,3 +666,12 @@ class StartScreen:
         )
         self.page.snack_bar.open = True
         self.page.update()
+
+    def dispose(self) -> None:
+        self._stop_all_animations()
+        self._auth_event.set()
+        if self._parse_task is not None and not self._parse_task.done():
+            self._parse_task.cancel()
+
+    def shutdown(self, _timeout: float = 6.0) -> None:
+        self.dispose()
