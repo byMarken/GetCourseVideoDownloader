@@ -1,5 +1,18 @@
+import asyncio
+import concurrent.futures
+from types import SimpleNamespace
+
 import flet as ft
 
+from getcourse_downloader.domain.events import DownloadEvent, DownloadEventType
+from getcourse_downloader.domain.models import Course, DownloadSummary, Lesson, SelectedLesson
+from getcourse_downloader.presentation.flet.screens.courses.components import (
+    build_course_tree,
+    build_download_lesson_row,
+    folder_badge_text,
+    iter_course_lessons,
+    selected_course_lessons,
+)
 from getcourse_downloader.presentation.flet.screens.courses.view import CoursesScreen
 from getcourse_downloader.presentation.flet.theme import Color
 
@@ -166,3 +179,321 @@ def test_build_failed_lessons_scrollable():
     assert isinstance(inner, ft.Column)
     assert inner.scroll == ft.ScrollMode.AUTO
     assert len(inner.controls) == 11
+
+
+def test_no_video_summary_is_presented_as_warning():
+    screen = CoursesScreen.__new__(CoursesScreen)
+    captured: dict[str, object] = {}
+
+    def finish(message, is_error=False, is_warning=False, failed=None):
+        captured.update(
+            message=message,
+            is_error=is_error,
+            is_warning=is_warning,
+            failed=failed,
+        )
+
+    screen._finish_download = finish
+    screen._finish_summary(DownloadSummary(total=1, downloaded=0, no_video=1))
+
+    assert captured["is_warning"] is True
+    assert "Без видео: 1" in str(captured["message"])
+
+
+def _nested_course() -> Course:
+    lessons = tuple(
+        Lesson(f"Урок {index}", f"https://school.example/lesson/{index}") for index in range(1, 15)
+    )
+    return Course(
+        title="Демо-курс",
+        url="https://school.example/course/root",
+        children=(
+            Course(
+                title="Учебный модуль",
+                url="https://school.example/course/child",
+                lessons=lessons,
+            ),
+        ),
+    )
+
+
+def _build_tree(
+    course: Course,
+    selected: set[str],
+    expanded: set[str],
+    query: str = "",
+):
+    return build_course_tree(
+        course,
+        accent="#7C3AED",
+        selected_urls=selected,
+        expanded_urls=expanded,
+        query=query,
+        on_folder_toggle=lambda _: None,
+        on_folder_selection=lambda _course, _selected: None,
+        on_lesson_selection=lambda _lesson, _selected: None,
+    )
+
+
+def test_recursive_lessons_keep_course_path():
+    items = list(iter_course_lessons(_nested_course()))
+
+    assert len(items) == 14
+    assert items[0].course_path == ("Демо-курс", "Учебный модуль")
+
+
+def test_selected_lessons_deduplicate_same_url_and_keep_first_tree_path():
+    duplicate = Lesson("Один урок", "https://school.example/lesson/shared")
+    courses = (
+        Course("Первый курс", lessons=(duplicate,), url="https://school.example/course/1"),
+        Course("Второй курс", lessons=(duplicate,), url="https://school.example/course/2"),
+    )
+
+    selected = selected_course_lessons(courses, {duplicate.url})
+
+    assert len(selected) == 1
+    assert selected[0].course_path == ("Первый курс",)
+
+
+def test_folder_badge_and_tristate_selection():
+    course = _nested_course()
+    selected = {f"https://school.example/lesson/{index}" for index in range(1, 4)}
+    tree = _build_tree(
+        course,
+        selected,
+        {"https://school.example/course/root"},
+    )
+
+    root_url = "https://school.example/course/root"
+    child_url = "https://school.example/course/child"
+    assert tree.folder_checkboxes[root_url].value is None
+    assert tree.folder_checkboxes[child_url].value is None
+    assert tree.folder_badges[root_url].value == "3 из 14"
+    assert folder_badge_text(0, 14) == "14 уроков"
+    assert folder_badge_text(14, 14) == "14 из 14"
+
+
+def test_selection_survives_collapse_and_expand():
+    course = _nested_course()
+    selected = {"https://school.example/lesson/2"}
+    root_url = "https://school.example/course/root"
+    child_url = "https://school.example/course/child"
+
+    collapsed = _build_tree(course, selected, set())
+    assert collapsed.lesson_checkboxes == {}
+    assert selected == {"https://school.example/lesson/2"}
+
+    expanded = _build_tree(course, selected, {root_url, child_url})
+    assert expanded.lesson_checkboxes["https://school.example/lesson/2"].value is True
+    assert expanded.lesson_checkboxes["https://school.example/lesson/1"].value is False
+
+
+def test_recursive_search_keeps_ancestors_and_only_matching_lessons():
+    course = _nested_course()
+    tree = _build_tree(course, set(), set(), "Урок 12")
+
+    assert set(tree.folder_checkboxes) == {
+        "https://school.example/course/root",
+        "https://school.example/course/child",
+    }
+    assert set(tree.lesson_checkboxes) == {"https://school.example/lesson/12"}
+
+
+def test_search_hides_unmatched_root_without_losing_selection_state():
+    course = _nested_course()
+    selected = {"https://school.example/lesson/2"}
+    tree = _build_tree(course, selected, set(), "такого урока нет")
+
+    assert tree.control.visible is False
+    assert tree.lesson_checkboxes == {}
+    assert selected == {"https://school.example/lesson/2"}
+
+
+def test_download_row_states_are_keyed_by_lesson_url():
+    item = SelectedLesson(
+        course_path=("Курс", "Модуль"),
+        lesson=Lesson("Урок", "https://school.example/lesson/1"),
+    )
+    lesson_row = build_download_lesson_row(item)
+    assert isinstance(lesson_row.control.key, ft.ScrollKey)
+    assert lesson_row.control.key.value == item.lesson.url
+    screen = CoursesScreen.__new__(CoursesScreen)
+    screen.page = _FakePage()
+    screen._download_rows = {item.lesson.url: lesson_row}
+
+    screen._update_download_row(
+        DownloadEvent(
+            DownloadEventType.LESSON_STARTED,
+            lesson="Урок",
+            lesson_url=item.lesson.url,
+        )
+    )
+    assert isinstance(lesson_row.status_holder.content, ft.Icon)
+    assert lesson_row.status_text.value == "Проверяем видео…"
+
+    screen._update_download_row(
+        DownloadEvent(
+            DownloadEventType.VIDEO_FOUND,
+            lesson="Урок",
+            lesson_url=item.lesson.url,
+        )
+    )
+    assert lesson_row.progress.visible is True
+
+    screen._update_download_row(
+        DownloadEvent(
+            DownloadEventType.PROGRESS,
+            lesson="Урок",
+            lesson_url=item.lesson.url,
+            current=3,
+            total=4,
+        )
+    )
+    assert lesson_row.progress.value == 0.75
+    assert lesson_row.progress_text.value == "75%"
+
+    screen._update_download_row(
+        DownloadEvent(
+            DownloadEventType.LESSON_COMPLETED,
+            lesson="Урок",
+            lesson_url=item.lesson.url,
+            quality="1080p",
+        )
+    )
+    assert lesson_row.status_text.value == "Готово · 1080p"
+    assert lesson_row.progress.visible is False
+    assert lesson_row.progress_text.visible is False
+
+    screen._update_download_row(
+        DownloadEvent(
+            DownloadEventType.LESSON_NO_VIDEO,
+            lesson="Урок",
+            lesson_url=item.lesson.url,
+        )
+    )
+    assert lesson_row.status_text.value == "Видео не найдено"
+    assert lesson_row.status_text.color == Color.RED
+    assert lesson_row.progress.visible is False
+
+
+def test_download_speed_is_formatted_for_header():
+    assert CoursesScreen._format_speed(512) == "512 Б/с"
+    assert CoursesScreen._format_speed(128 * 1024) == "128 КБ/с"
+    assert CoursesScreen._format_speed(1.5 * 1024 * 1024) == "1.5 МБ/с"
+
+
+def test_download_scroll_targets_lesson_and_ignores_detached_control():
+    class Scrollable:
+        def __init__(self, *, detached: bool = False):
+            self.detached = detached
+            self.calls: list[dict[str, object]] = []
+
+        async def scroll_to(self, **kwargs):
+            if self.detached:
+                raise RuntimeError("Control must be added to the page first")
+            self.calls.append(kwargs)
+
+    async def scenario() -> list[dict[str, object]]:
+        screen = CoursesScreen.__new__(CoursesScreen)
+        visible = Scrollable()
+        screen._download_rows_column = visible
+        await screen._scroll_download_to("https://school.example/lesson/7")
+        screen._download_rows_column = Scrollable(detached=True)
+        await screen._scroll_download_to("https://school.example/lesson/8")
+        return visible.calls
+
+    calls = asyncio.run(scenario())
+
+    assert calls[0]["scroll_key"] == "https://school.example/lesson/7"
+    assert calls[0]["duration"] == 650
+    assert calls[0]["curve"] is ft.AnimationCurve.EASE_IN_OUT_CUBIC
+
+
+def test_download_scroll_keeps_previous_lesson_at_top():
+    screen = CoursesScreen.__new__(CoursesScreen)
+    screen._download_rows = {
+        "https://school.example/lesson/1": object(),
+        "https://school.example/lesson/2": object(),
+        "https://school.example/lesson/3": object(),
+    }
+
+    assert (
+        screen._download_scroll_target("https://school.example/lesson/1")
+        == "https://school.example/lesson/1"
+    )
+    assert (
+        screen._download_scroll_target("https://school.example/lesson/3")
+        == "https://school.example/lesson/2"
+    )
+
+
+def test_download_follow_pauses_on_manual_scroll_and_tracks_latest_lesson():
+    class Page:
+        def __init__(self):
+            self.handlers = []
+
+        def run_task(self, handler, *args):
+            self.handlers.append((handler, args))
+            return concurrent.futures.Future()
+
+    screen = CoursesScreen.__new__(CoursesScreen)
+    screen.page = Page()
+    screen.state = SimpleNamespace(downloading=True)
+    screen._download_follow_paused = False
+    screen._active_lesson_url = "https://school.example/lesson/1"
+    screen._download_scroll_task = concurrent.futures.Future()
+    screen._download_follow_resume_task = None
+    scheduled: list[str] = []
+    screen._schedule_download_scroll = scheduled.append
+
+    screen._on_download_rows_scroll(
+        SimpleNamespace(
+            event_type=ft.ScrollType.USER,
+            direction=ft.ScrollDirection.REVERSE,
+        )
+    )
+    first_resume_task = screen._download_follow_resume_task
+    screen._on_download_rows_scroll(
+        SimpleNamespace(
+            event_type=ft.ScrollType.USER,
+            direction=ft.ScrollDirection.IDLE,
+        )
+    )
+    screen._follow_download_lesson("https://school.example/lesson/2")
+
+    assert screen._download_follow_paused is True
+    assert screen._download_scroll_task.cancelled() is True
+    assert screen._active_lesson_url == "https://school.example/lesson/2"
+    assert scheduled == []
+    assert first_resume_task.cancelled() is True
+    assert len(screen.page.handlers) == 2
+    assert screen.page.handlers[0][0] == screen._resume_download_follow
+
+
+def test_download_follow_resumes_at_active_lesson_after_pause(monkeypatch):
+    from getcourse_downloader.presentation.flet.screens.courses import view as view_module
+
+    async def scenario() -> tuple[bool, list[str]]:
+        screen = CoursesScreen.__new__(CoursesScreen)
+        screen.state = SimpleNamespace(downloading=True)
+        screen._download_follow_resume_task = concurrent.futures.Future()
+        screen._download_follow_paused = True
+        screen._active_lesson_url = "https://school.example/lesson/9"
+        screen._download_rows = {
+            "https://school.example/lesson/8": object(),
+            "https://school.example/lesson/9": object(),
+        }
+        calls: list[str] = []
+
+        async def scroll(lesson_url: str) -> None:
+            calls.append(lesson_url)
+
+        screen._scroll_download_to = scroll
+        await screen._resume_download_follow()
+        return screen._download_follow_paused, calls
+
+    monkeypatch.setattr(view_module, "_DOWNLOAD_FOLLOW_PAUSE_SECONDS", 0)
+    paused, calls = asyncio.run(scenario())
+
+    assert paused is False
+    assert calls == ["https://school.example/lesson/8"]
