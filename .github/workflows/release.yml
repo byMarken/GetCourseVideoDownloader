@@ -72,8 +72,11 @@ jobs:
       - name: Smoke-test packaged worker
         shell: pwsh
         run: |
-          & "dist\GetCourseVideoDownloader\GetCourseVideoDownloader.exe" --download-worker --help
-          if ($LASTEXITCODE -ne 0) { throw "Packaged worker smoke-test failed" }
+          $Process = Start-Process `
+            -FilePath "dist\GetCourseVideoDownloader\GetCourseVideoDownloader.exe" `
+            -ArgumentList "--download-worker", "--help" `
+            -Wait -PassThru -WindowStyle Hidden
+          if ($Process.ExitCode -ne 0) { throw "Packaged worker smoke-test failed ($($Process.ExitCode))" }
 
       - name: Upload executable for signing
         if: env.SIGNPATH_API_TOKEN != ''

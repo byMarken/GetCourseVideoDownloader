@@ -86,8 +86,12 @@ Copy-Item -LiteralPath $Resources -Destination $DistApp -Recurse -Force
 
 Write-Host "[6/7] Проверяю worker внутри EXE..."
 $Executable = Join-Path $DistApp "$AppName.exe"
-& $Executable --download-worker --help | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "Собранный EXE не прошёл worker smoke-test" }
+$WorkerSmokeTest = Start-Process -FilePath $Executable `
+    -ArgumentList "--download-worker", "--help" `
+    -Wait -PassThru -WindowStyle Hidden
+if ($WorkerSmokeTest.ExitCode -ne 0) {
+    throw "Собранный EXE не прошёл worker smoke-test ($($WorkerSmokeTest.ExitCode))"
+}
 
 Write-Host "[7/7] Создаю архив и SHA-256..."
 $ZipPath = Join-Path $Root "dist\$AppName-win-x64.zip"
