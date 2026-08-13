@@ -20,10 +20,14 @@ def _process_exists(pid: int) -> bool:
         except OSError:
             return False
         return True
-    process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return False
+    kernel32 = windll.kernel32
+    process = kernel32.OpenProcess(0x1000, False, pid)
     if not process:
         return False
-    ctypes.windll.kernel32.CloseHandle(process)
+    kernel32.CloseHandle(process)
     return True
 
 
