@@ -19,3 +19,6 @@ class DownloadLessons:
 
     def cancel(self) -> None:
         self._gateway.cancel()
+
+    def shutdown(self, timeout: float = 6.0) -> None:
+        self._gateway.shutdown(timeout)
