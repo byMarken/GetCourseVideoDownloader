@@ -1,12 +1,24 @@
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
-from getcourse_downloader.domain.events import VideoCheckEvent
 from getcourse_downloader.domain.models import Course
 
 AuthRequiredCallback = Callable[[str], Awaitable[None]]
-CourseDiscoveredCallback = Callable[[str, int], Awaitable[None]]
-VideoCheckCallback = Callable[[VideoCheckEvent], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class CourseDiscoveryUpdate:
+    url: str
+    title: str
+    lesson_count: int | None = None
+
+    @property
+    def loaded(self) -> bool:
+        return self.lesson_count is not None
+
+
+CourseDiscoveredCallback = Callable[[CourseDiscoveryUpdate], Awaitable[None]]
 
 
 class CourseDiscoverer(Protocol):
@@ -16,5 +28,4 @@ class CourseDiscoverer(Protocol):
         *,
         on_auth_required: AuthRequiredCallback | None = None,
         on_course_discovered: CourseDiscoveredCallback | None = None,
-        on_video_check: VideoCheckCallback | None = None,
     ) -> Sequence[Course]: ...

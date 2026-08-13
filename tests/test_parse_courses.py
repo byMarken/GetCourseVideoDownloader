@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from getcourse_downloader.infrastructure.getcourse.discovery import (
     GetCourseDiscoverer,
@@ -139,12 +144,26 @@ class _FakeElement:
 
 
 class _FakePage:
-    def __init__(self, pages: dict[str, dict[str, Any]], start_url: str) -> None:
+    def __init__(
+        self,
+        browser: _FakeBrowser,
+        pages: dict[str, dict[str, Any]],
+        start_url: str,
+    ) -> None:
+        self._browser = browser
         self._pages = pages
         self.url = start_url
+        self.closed = False
 
     async def goto(self, url: str, **_: object) -> None:
         self.url = url
+        self._browser.visited_urls.append(url)
+        await asyncio.sleep(float(self._pages[url].get("delay", 0)))
+
+    async def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self._browser.active_pages -= 1
 
     async def wait_for_load_state(self, *_: object, **__: object) -> None:
         return None
@@ -169,6 +188,26 @@ class _FakePage:
         return None
 
 
+class _FakeBrowser:
+    def __init__(self, pages: dict[str, dict[str, Any]]) -> None:
+        self._pages = pages
+        self.active_pages = 0
+        self.max_active_pages = 0
+        self.visited_urls: list[str] = []
+
+    async def new_page(self) -> _FakePage:
+        if self.active_pages == 0:
+            raise RuntimeError("Firefox persistent context has no live window")
+        self.active_pages += 1
+        self.max_active_pages = max(self.max_active_pages, self.active_pages)
+        return _FakePage(self, self._pages, "about:blank")
+
+    def landing_page(self, url: str) -> _FakePage:
+        self.active_pages += 1
+        self.max_active_pages = max(self.max_active_pages, self.active_pages)
+        return _FakePage(self, self._pages, url)
+
+
 def _lesson_html(identifier: int, title: str) -> str:
     return (
         '<li><a href="/teach/control/lesson/view/id/'
@@ -183,12 +222,29 @@ def _stream_row_html(identifier: int, title: str) -> str:
     )
 
 
-def test_recursive_discovery_from_main_page_keeps_hierarchy_and_removes_duplicates():
+def _nested_stream_rows_from_fixture() -> list[str]:
+    html = (FIXTURES / "nested_stream_rows.html").read_text(encoding="utf-8")
+    return re.findall(r"<tr\b.*?</tr>", html, flags=re.DOTALL)
+
+
+def _page_from_fixture(name: str) -> dict[str, Any]:
+    html = (FIXTURES / name).read_text(encoding="utf-8")
+    title_match = re.search(r"<h1>(.*?)</h1>", html, flags=re.DOTALL)
+    return {
+        "title": clean_title(title_match.group(1)) if title_match else "",
+        "content": html,
+        "stream_rows": re.findall(r"<tr\b.*?</tr>", html, flags=re.DOTALL),
+        "lessons": re.findall(r"<li\b.*?</li>", html, flags=re.DOTALL),
+    }
+
+
+def test_recursive_discovery_keeps_tree_order_and_ignores_stream_page_fallback():
     base = "https://school.example"
     main_url = f"{base}/teach/control"
     course_a = f"{base}/teach/control/stream/view/id/100"
     course_b = f"{base}/teach/control/stream/view/id/200"
     module_b = f"{base}/teach/control/stream/view/id/201"
+    module_c = f"{base}/teach/control/stream/view/id/202"
     pages: dict[str, dict[str, Any]] = {
         main_url: {
             "content": (
@@ -208,23 +264,204 @@ def test_recursive_discovery_from_main_page_keeps_hierarchy_and_removes_duplicat
             "title": "Курс B",
             "content": "",
             "lessons": [_lesson_html(2001, "Введение")],
-            "stream_rows": [_stream_row_html(201, "Модуль")],
+            "stream_rows": _nested_stream_rows_from_fixture(),
         },
         module_b: {
-            "title": "Модуль",
+            "title": "Модуль 1",
             "content": r'parent="\/teach\/control\/stream\/view\/id\/200"',
-            "lessons": [
-                _lesson_html(2001, "Введение повторно"),
-                _lesson_html(2011, "Практика"),
-            ],
+            "lessons": [_lesson_html(2011, "Практика 1")],
+        },
+        module_c: {
+            "title": "Модуль 2",
+            "content": "",
+            "lessons": [_lesson_html(2021, "Практика 2")],
         },
     }
     discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
-    page: Any = _FakePage(pages, main_url)
-    courses = asyncio.run(discoverer._parse_page(page, main_url))
+    browser = _FakeBrowser(pages)
+    page: Any = browser.landing_page(main_url)
+    progress: list[tuple[str, str, int | None]] = []
 
-    assert [(course.title, [lesson.title for lesson in course.lessons]) for course in courses] == [
-        ("Курс A", ["Урок A"]),
-        ("Курс B", ["Введение"]),
-        ("Курс B → Модуль", ["Практика"]),
-    ]
+    async def on_course(update) -> None:
+        progress.append((update.url, update.title, update.lesson_count))
+
+    courses = asyncio.run(
+        discoverer._parse_page(
+            browser,  # type: ignore[arg-type]
+            page,
+            main_url,
+            on_course_discovered=on_course,
+        )
+    )
+
+    assert [course.title for course in courses] == ["Курс A", "Курс B"]
+    assert [child.title for child in courses[1].children] == ["Модуль 2", "Модуль 1"]
+    assert [lesson.title for lesson in courses[1].children[0].lessons] == ["Практика 2"]
+    assert courses[1].lesson_count == 3
+    latest_counts = {url: lesson_count for url, _, lesson_count in progress}
+    assert latest_counts == {
+        course_a: 1,
+        course_b: 3,
+        module_b: 1,
+        module_c: 1,
+    }
+    assert (course_b, "Курс B", None) in progress
+    assert (course_b, "Курс B", 3) in progress
+    assert (course_b, "Курс B", 0) not in progress
+    assert progress[0][2] is None
+    assert set(browser.visited_urls) == {course_a, course_b, module_b, module_c}
+    assert browser.max_active_pages <= 4
+    assert browser.active_pages == 0
+
+
+def test_discovery_concurrency_is_capped_at_four():
+    with pytest.raises(ValueError, match="between 1 and 4"):
+        GetCourseDiscoverer(browser_factory=None, concurrency=5)  # type: ignore[arg-type]
+
+
+def test_landing_page_stays_alive_while_firefox_creates_stream_tabs():
+    base = "https://school.example"
+    main_url = f"{base}/teach/control"
+    stream_url = f"{base}/teach/control/stream/view/id/100"
+    pages = {
+        main_url: {"content": r'course="\/teach\/control\/stream\/view\/id\/100";'},
+        stream_url: {"title": "Курс", "content": ""},
+    }
+    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
+    browser = _FakeBrowser(pages)
+
+    courses = asyncio.run(
+        discoverer._parse_page(  # type: ignore[arg-type]
+            browser,
+            browser.landing_page(main_url),
+            main_url,
+        )
+    )
+
+    assert [course.title for course in courses] == ["Курс"]
+    assert browser.active_pages == 0
+
+
+def test_sample_nested_tree_keeps_folder_and_fourteen_lessons():
+    base = "https://school.example"
+    club_url = f"{base}/teach/control/stream/view/id/100"
+    dividend_url = f"{base}/teach/control/stream/view/id/200"
+    pages = {
+        club_url: _page_from_fixture("sample_course.html"),
+        dividend_url: _page_from_fixture("sample_module.html"),
+    }
+    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
+    browser = _FakeBrowser(pages)
+
+    courses = asyncio.run(
+        discoverer._parse_page(  # type: ignore[arg-type]
+            browser,
+            browser.landing_page(club_url),
+            club_url,
+        )
+    )
+
+    assert len(courses) == 1
+    assert courses[0].title == "Демо-курс"
+    assert [child.title for child in courses[0].children] == ["Учебный модуль"]
+    assert courses[0].lesson_count == 14
+    assert len(courses[0].children[0].lessons) == 14
+    assert not any("/lesson/" in url for url in browser.visited_urls)
+
+
+def test_direct_child_start_does_not_follow_breadcrumb_parent():
+    base = "https://school.example"
+    club_url = f"{base}/teach/control/stream/view/id/100"
+    dividend_url = f"{base}/teach/control/stream/view/id/200"
+    pages = {
+        club_url: _page_from_fixture("sample_course.html"),
+        dividend_url: _page_from_fixture("sample_module.html"),
+    }
+    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
+    browser = _FakeBrowser(pages)
+
+    courses = asyncio.run(
+        discoverer._parse_page(  # type: ignore[arg-type]
+            browser,
+            browser.landing_page(dividend_url),
+            dividend_url,
+        )
+    )
+
+    assert [course.title for course in courses] == ["Учебный модуль"]
+    assert courses[0].children == ()
+    assert browser.visited_urls == []
+    assert club_url not in browser.visited_urls
+
+
+def test_shared_child_uses_first_parent_order_not_fetch_completion_order():
+    base = "https://school.example"
+    main_url = f"{base}/teach/control"
+    root_a = f"{base}/teach/control/stream/view/id/100"
+    root_b = f"{base}/teach/control/stream/view/id/200"
+    shared = f"{base}/teach/control/stream/view/id/300"
+    pages = {
+        main_url: {
+            "content": (
+                r'first="\/teach\/control\/stream\/view\/id\/100";'
+                r'second="\/teach\/control\/stream\/view\/id\/200";'
+            )
+        },
+        root_a: {
+            "title": "Первый",
+            "content": "",
+            "delay": 0.02,
+            "stream_rows": [_stream_row_html(300, "Общий модуль")],
+        },
+        root_b: {
+            "title": "Второй",
+            "content": "",
+            "stream_rows": [_stream_row_html(300, "Общий модуль")],
+        },
+        shared: {
+            "title": "Общий модуль",
+            "content": "",
+            "lessons": [_lesson_html(3001, "Общий урок")],
+        },
+    }
+    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
+    browser = _FakeBrowser(pages)
+
+    courses = asyncio.run(
+        discoverer._parse_page(  # type: ignore[arg-type]
+            browser,
+            browser.landing_page(main_url),
+            main_url,
+        )
+    )
+
+    assert [course.title for course in courses] == ["Первый", "Второй"]
+    assert [child.title for child in courses[0].children] == ["Общий модуль"]
+    assert courses[1].children == ()
+    assert browser.visited_urls.count(shared) == 1
+
+
+def test_regex_fallback_is_not_used_on_non_landing_page():
+    base = "https://school.example"
+    arbitrary_url = f"{base}/some/custom/page"
+    stream_url = f"{base}/teach/control/stream/view/id/100"
+    pages = {
+        arbitrary_url: {"content": r'embedded="\/teach\/control\/stream\/view\/id\/100";'},
+        stream_url: {
+            "title": "Не должен загружаться",
+            "content": "",
+        },
+    }
+    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
+    browser = _FakeBrowser(pages)
+
+    courses = asyncio.run(
+        discoverer._parse_page(  # type: ignore[arg-type]
+            browser,
+            browser.landing_page(arbitrary_url),
+            arbitrary_url,
+        )
+    )
+
+    assert courses == []
+    assert browser.visited_urls == []

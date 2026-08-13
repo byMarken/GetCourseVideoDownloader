@@ -4,8 +4,8 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
+from getcourse_downloader.application.ports.discovery import CourseDiscoveryUpdate
 from getcourse_downloader.bootstrap import build_container
-from getcourse_downloader.domain.events import VideoCheckEvent, VideoCheckStatus
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,21 +21,14 @@ async def _run(url: str) -> int:
         print(f"[AUTH] {message}")
         await asyncio.get_running_loop().run_in_executor(None, input)
 
-    async def course_found(title: str, count: int) -> None:
-        print(f"[COURSE] {title}: {count} уроков")
-
-    async def video_checked(event: VideoCheckEvent) -> None:
-        if event.status is VideoCheckStatus.CHECKING:
-            print(f"[CHECK] {event.lesson_title}")
-            return
-        marker = "✓" if event.status is VideoCheckStatus.VIDEO else "✗"
-        print(f"[{event.checked}/{event.total}] {marker} {event.lesson_title}")
+    async def course_found(update: CourseDiscoveryUpdate) -> None:
+        status = f"{update.lesson_count} уроков" if update.loaded else "найден"
+        print(f"[FOLDER] {update.title}: {status}")
 
     courses = await container.discover_courses.execute(
         url,
         on_auth_required=wait_for_auth,
         on_course_discovered=course_found,
-        on_video_check=video_checked,
     )
     print(f"[OK] Сохранено курсов: {len(courses)}")
     return 0

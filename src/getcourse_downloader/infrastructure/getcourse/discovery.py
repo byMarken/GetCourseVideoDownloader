@@ -3,24 +3,25 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
-from playwright.async_api import Page, Playwright, async_playwright
+from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
 
 from getcourse_downloader.application.ports.discovery import (
     AuthRequiredCallback,
     CourseDiscoveredCallback,
-    VideoCheckCallback,
+    CourseDiscoveryUpdate,
 )
 from getcourse_downloader.domain.errors import ExternalServiceError
 from getcourse_downloader.domain.models import Course, Lesson
 from getcourse_downloader.infrastructure.browser.playwright import PlaywrightBrowserFactory
-from getcourse_downloader.infrastructure.getcourse.video_probe import GetCourseVideoProbe
 
 MAX_STREAMS = 500
+DISCOVERY_CONCURRENCY = 4
 
 _STREAM_REFERENCE_RE = re.compile(
     r"(?:(?:https?:)?//[^\"'<>\s\\]+)?/(?:pl/)?teach/control/stream/"
@@ -33,6 +34,13 @@ _STREAM_REFERENCE_RE = re.compile(
 class _StreamLink:
     url: str
     title: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamSnapshot:
+    title: str
+    lessons: tuple[Lesson, ...]
+    children: tuple[_StreamLink, ...]
 
 
 def clean_title(title: str) -> str:
@@ -149,6 +157,17 @@ def extract_stream_urls(html: str, base_url: str) -> list[str]:
     return result
 
 
+def _is_stream_landing_url(url: str) -> bool:
+    path = urlsplit(url).path.rstrip("/")
+    return bool(
+        re.fullmatch(
+            r"/(?:pl/)?teach/control(?:/stream(?:/index)?)?",
+            path,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 async def _is_authentication_required(page: Page) -> bool:
     with contextlib.suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=10_000)
@@ -159,10 +178,13 @@ class GetCourseDiscoverer:
     def __init__(
         self,
         browser_factory: PlaywrightBrowserFactory,
-        video_probe: GetCourseVideoProbe | None = None,
+        *,
+        concurrency: int = DISCOVERY_CONCURRENCY,
     ) -> None:
+        if concurrency < 1 or concurrency > DISCOVERY_CONCURRENCY:
+            raise ValueError(f"concurrency must be between 1 and {DISCOVERY_CONCURRENCY}")
         self._browsers = browser_factory
-        self._video_probe = video_probe or GetCourseVideoProbe()
+        self._concurrency = concurrency
 
     async def discover(
         self,
@@ -170,44 +192,33 @@ class GetCourseDiscoverer:
         *,
         on_auth_required: AuthRequiredCallback | None = None,
         on_course_discovered: CourseDiscoveredCallback | None = None,
-        on_video_check: VideoCheckCallback | None = None,
     ) -> list[Course]:
         async with async_playwright() as playwright:
-            await self._ensure_authenticated(playwright, url, on_auth_required)
             browser = await self._browsers.launch(playwright, headless=True)
             try:
                 page = browser.pages[0] if browser.pages else await browser.new_page()
                 await page.goto(url, wait_until="domcontentloaded")
-                courses = await self._parse_page(page, url)
-                courses = await self._video_probe.filter_courses(
+                if await _is_authentication_required(page):
+                    await browser.close()
+                    await self._authenticate_interactive(playwright, url, on_auth_required)
+                    browser = await self._browsers.launch(playwright, headless=True)
+                    page = browser.pages[0] if browser.pages else await browser.new_page()
+                    await page.goto(url, wait_until="domcontentloaded")
+                return await self._parse_page(
                     browser,
-                    courses,
-                    on_video_check=on_video_check,
+                    page,
+                    url,
+                    on_course_discovered=on_course_discovered,
                 )
-                if on_course_discovered:
-                    for course in courses:
-                        await on_course_discovered(course.title, len(course.lessons))
-                return courses
             finally:
                 await browser.close()
 
-    async def _ensure_authenticated(
+    async def _authenticate_interactive(
         self,
         playwright: Playwright,
         url: str,
         callback: AuthRequiredCallback | None,
     ) -> None:
-        browser = await self._browsers.launch(playwright, headless=True)
-        try:
-            page = browser.pages[0] if browser.pages else await browser.new_page()
-            await page.goto(url, wait_until="domcontentloaded")
-            needs_auth = await _is_authentication_required(page)
-        finally:
-            await browser.close()
-
-        if not needs_auth:
-            return
-
         browser = await self._browsers.launch(playwright, headless=False)
         try:
             login_page = browser.pages[0] if browser.pages else await browser.new_page()
@@ -233,82 +244,253 @@ class GetCourseDiscoverer:
 
     async def _parse_page(
         self,
+        browser: BrowserContext,
         page: Page,
         playlist_url: str,
+        *,
+        on_course_discovered: CourseDiscoveredCallback | None = None,
     ) -> list[Course]:
         current_url = page.url or playlist_url
         direct_stream = normalize_stream_url(current_url, current_url)
-        if direct_stream:
-            seeds = [_StreamLink(direct_stream)]
-        else:
-            seeds = await self._extract_stream_links(page, current_url)
-
-        visited_streams: set[str] = set()
-        seen_lessons: set[str] = set()
-        result: list[Course] = []
-        for seed in seeds:
-            result.extend(
-                await self._crawl_stream(
+        initial_graph: dict[str, _StreamSnapshot] = {}
+        try:
+            if direct_stream:
+                seeds = [_StreamLink(direct_stream)]
+                snapshot = await self._read_loaded_stream(page, seeds[0])
+                initial_graph[direct_stream] = snapshot
+                if on_course_discovered:
+                    await on_course_discovered(
+                        CourseDiscoveryUpdate(
+                            direct_stream,
+                            snapshot.title,
+                            self._resolved_snapshot_count(snapshot),
+                        )
+                    )
+                    for child in snapshot.children:
+                        await on_course_discovered(self._discovery_update(child))
+            else:
+                seeds = await self._extract_stream_links(
                     page,
-                    seed,
-                    parent_titles=(),
-                    visited_streams=visited_streams,
-                    seen_lessons=seen_lessons,
+                    current_url,
+                    allow_fallback=_is_stream_landing_url(current_url),
                 )
-            )
-        return result
+                if on_course_discovered:
+                    for seed in seeds:
+                        await on_course_discovered(self._discovery_update(seed))
 
-    async def _crawl_stream(
+            semaphore = asyncio.Semaphore(self._concurrency)
+            callback_lock = asyncio.Lock()
+            graph = await self._fetch_stream_graph(
+                browser,
+                seeds,
+                semaphore=semaphore,
+                callback_lock=callback_lock,
+                on_course_discovered=on_course_discovered,
+                initial_graph=initial_graph,
+            )
+            claimed: set[str] = set()
+            courses = [self._build_tree(seed, graph, claimed) for seed in seeds]
+            return [course for course in courses if course is not None]
+        finally:
+            with contextlib.suppress(Exception):
+                await page.close()
+
+    async def _fetch_stream_graph(
         self,
-        page: Page,
-        stream: _StreamLink,
+        browser: BrowserContext,
+        seeds: list[_StreamLink],
         *,
-        parent_titles: tuple[str, ...],
-        visited_streams: set[str],
-        seen_lessons: set[str],
-    ) -> list[Course]:
-        if stream.url in visited_streams:
-            return []
-        if len(visited_streams) >= MAX_STREAMS:
-            raise ExternalServiceError(
-                f"Обход остановлен: найдено больше {MAX_STREAMS} вложенных курсов"
-            )
-        visited_streams.add(stream.url)
+        semaphore: asyncio.Semaphore,
+        callback_lock: asyncio.Lock,
+        on_course_discovered: CourseDiscoveredCallback | None,
+        initial_graph: dict[str, _StreamSnapshot],
+    ) -> dict[str, _StreamSnapshot]:
+        graph = dict(initial_graph)
+        reported_counts = {
+            stream_url: self._resolved_snapshot_count(snapshot)
+            for stream_url, snapshot in graph.items()
+        }
+        scheduled = set(graph)
+        frontier: list[_StreamLink] = []
+        for seed in seeds:
+            snapshot = graph.get(seed.url)
+            if snapshot is None:
+                self._extend_frontier(frontier, [seed], scheduled)
+            else:
+                self._extend_frontier(frontier, snapshot.children, scheduled)
 
-        await page.goto(stream.url, wait_until="domcontentloaded", timeout=30_000)
-        if await _is_authentication_required(page):
-            raise ExternalServiceError("Сессия GetCourse завершилась во время обхода курсов")
-
-        title = await self._read_stream_title(page, stream)
-        title_path = self._append_title(parent_titles, title)
-        course_title = " → ".join(title_path)
-
-        direct_lessons = await self._read_lessons(page, page.url)
-        lessons: list[Lesson] = []
-        for lesson in direct_lessons:
-            if lesson.url not in seen_lessons:
-                seen_lessons.add(lesson.url)
-                lessons.append(lesson)
-
-        result: list[Course] = []
-        if lessons:
-            result.append(Course(title=course_title, lessons=tuple(lessons)))
-
-        children = await self._extract_stream_links(page, page.url)
-        for child in children:
-            result.extend(
-                await self._crawl_stream(
-                    page,
-                    child,
-                    parent_titles=title_path,
-                    visited_streams=visited_streams,
-                    seen_lessons=seen_lessons,
+        while frontier:
+            snapshots = await asyncio.gather(
+                *(
+                    self._fetch_stream(
+                        browser,
+                        stream,
+                        semaphore=semaphore,
+                        callback_lock=callback_lock,
+                        on_course_discovered=on_course_discovered,
+                    )
+                    for stream in frontier
                 )
             )
-        return result
+            next_frontier: list[_StreamLink] = []
+            for stream, snapshot in zip(frontier, snapshots, strict=True):
+                graph[stream.url] = snapshot
+                reported_counts[stream.url] = self._resolved_snapshot_count(snapshot)
+                self._extend_frontier(next_frontier, snapshot.children, scheduled)
+            if on_course_discovered:
+                claimed: set[str] = set()
+                partial_courses = [self._build_tree(seed, graph, claimed) for seed in seeds]
+                async with callback_lock:
+                    for course in self._walk_courses(
+                        course for course in partial_courses if course is not None
+                    ):
+                        if not self._is_subtree_loaded(course.url, graph):
+                            continue
+                        if reported_counts.get(course.url) == course.lesson_count:
+                            continue
+                        reported_counts[course.url] = course.lesson_count
+                        await on_course_discovered(
+                            CourseDiscoveryUpdate(
+                                course.url,
+                                course.title,
+                                course.lesson_count,
+                            )
+                        )
+            frontier = next_frontier
+        return graph
+
+    @classmethod
+    def _walk_courses(cls, courses: Iterable[Course]) -> Iterable[Course]:
+        for course in courses:
+            yield course
+            yield from cls._walk_courses(course.children)
 
     @staticmethod
-    async def _extract_stream_links(page: Page, base_url: str) -> list[_StreamLink]:
+    def _resolved_snapshot_count(snapshot: _StreamSnapshot) -> int | None:
+        if snapshot.children:
+            return None
+        return len(snapshot.lessons)
+
+    @classmethod
+    def _is_subtree_loaded(
+        cls,
+        stream_url: str,
+        graph: dict[str, _StreamSnapshot],
+        visiting: set[str] | None = None,
+    ) -> bool:
+        snapshot = graph.get(stream_url)
+        if snapshot is None:
+            return False
+        path = set() if visiting is None else visiting
+        if stream_url in path:
+            return True
+        path.add(stream_url)
+        try:
+            return all(
+                cls._is_subtree_loaded(child.url, graph, path) for child in snapshot.children
+            )
+        finally:
+            path.remove(stream_url)
+
+    @staticmethod
+    def _extend_frontier(
+        frontier: list[_StreamLink],
+        candidates: list[_StreamLink] | tuple[_StreamLink, ...],
+        scheduled: set[str],
+    ) -> None:
+        for candidate in candidates:
+            if candidate.url in scheduled:
+                continue
+            if len(scheduled) >= MAX_STREAMS:
+                raise ExternalServiceError(
+                    f"Обход остановлен: найдено больше {MAX_STREAMS} вложенных курсов"
+                )
+            scheduled.add(candidate.url)
+            frontier.append(candidate)
+
+    async def _fetch_stream(
+        self,
+        browser: BrowserContext,
+        stream: _StreamLink,
+        *,
+        semaphore: asyncio.Semaphore,
+        callback_lock: asyncio.Lock,
+        on_course_discovered: CourseDiscoveredCallback | None,
+    ) -> _StreamSnapshot:
+        async with semaphore:
+            page = await browser.new_page()
+            try:
+                await page.goto(stream.url, wait_until="domcontentloaded", timeout=30_000)
+                snapshot = await self._read_loaded_stream(page, stream)
+            finally:
+                with contextlib.suppress(Exception):
+                    await page.close()
+
+        if on_course_discovered:
+            async with callback_lock:
+                await on_course_discovered(
+                    CourseDiscoveryUpdate(
+                        stream.url,
+                        snapshot.title,
+                        self._resolved_snapshot_count(snapshot),
+                    )
+                )
+                for child in snapshot.children:
+                    await on_course_discovered(self._discovery_update(child))
+
+        return snapshot
+
+    @staticmethod
+    def _discovery_update(stream: _StreamLink) -> CourseDiscoveryUpdate:
+        fallback = stream.url.rstrip("/").rsplit("/", maxsplit=1)[-1]
+        return CourseDiscoveryUpdate(stream.url, stream.title or f"Курс {fallback}")
+
+    async def _read_loaded_stream(self, page: Page, stream: _StreamLink) -> _StreamSnapshot:
+        if await _is_authentication_required(page):
+            raise ExternalServiceError("Сессия GetCourse завершилась во время обхода курсов")
+        title = await self._read_stream_title(page, stream)
+        lessons = tuple(await self._read_lessons(page, page.url))
+        children = tuple(
+            await self._extract_stream_links(
+                page,
+                page.url,
+                allow_fallback=False,
+            )
+        )
+        return _StreamSnapshot(title=title, lessons=lessons, children=children)
+
+    @classmethod
+    def _build_tree(
+        cls,
+        stream: _StreamLink,
+        graph: dict[str, _StreamSnapshot],
+        claimed: set[str],
+    ) -> Course | None:
+        if stream.url in claimed:
+            return None
+        snapshot = graph.get(stream.url)
+        if snapshot is None:
+            return None
+        claimed.add(stream.url)
+        children = tuple(
+            child_course
+            for child in snapshot.children
+            if (child_course := cls._build_tree(child, graph, claimed)) is not None
+        )
+        return Course(
+            title=snapshot.title,
+            lessons=snapshot.lessons,
+            url=stream.url,
+            children=children,
+        )
+
+    @staticmethod
+    async def _extract_stream_links(
+        page: Page,
+        base_url: str,
+        *,
+        allow_fallback: bool,
+    ) -> list[_StreamLink]:
         ordered: list[_StreamLink] = []
         indexes: dict[str, int] = {}
 
@@ -322,10 +504,11 @@ class GetCourseDiscoverer:
             indexes[url] = len(ordered)
             ordered.append(_StreamLink(url=url, title=hint))
 
-        for url in extract_stream_urls(await page.content(), base_url):
-            if url not in indexes:
-                indexes[url] = len(ordered)
-                ordered.append(_StreamLink(url=url))
+        if allow_fallback and not ordered:
+            for url in extract_stream_urls(await page.content(), base_url):
+                if url not in indexes:
+                    indexes[url] = len(ordered)
+                    ordered.append(_StreamLink(url=url))
         return ordered
 
     @staticmethod
@@ -340,12 +523,6 @@ class GetCourseDiscoverer:
             return stream.title
         identifier = stream.url.rstrip("/").rsplit("/", maxsplit=1)[-1]
         return f"Курс {identifier}"
-
-    @staticmethod
-    def _append_title(parent_titles: tuple[str, ...], title: str) -> tuple[str, ...]:
-        if parent_titles and parent_titles[-1].casefold() == title.casefold():
-            return parent_titles
-        return (*parent_titles, title)
 
     @staticmethod
     async def _read_lessons(page: Page, base_url: str) -> list[Lesson]:

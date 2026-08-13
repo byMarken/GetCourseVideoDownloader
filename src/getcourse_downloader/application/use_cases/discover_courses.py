@@ -2,7 +2,6 @@ from getcourse_downloader.application.ports.discovery import (
     AuthRequiredCallback,
     CourseDiscoveredCallback,
     CourseDiscoverer,
-    VideoCheckCallback,
 )
 from getcourse_downloader.application.ports.repositories import CourseRepository
 from getcourse_downloader.domain.errors import DownloadConfigurationError, ExternalServiceError
@@ -20,7 +19,6 @@ class DiscoverCourses:
         *,
         on_auth_required: AuthRequiredCallback | None = None,
         on_course_discovered: CourseDiscoveredCallback | None = None,
-        on_video_check: VideoCheckCallback | None = None,
     ) -> list[Course]:
         normalized_url = url.strip()
         if not normalized_url.startswith(("http://", "https://")):
@@ -31,7 +29,6 @@ class DiscoverCourses:
                 normalized_url,
                 on_auth_required=on_auth_required,
                 on_course_discovered=on_course_discovered,
-                on_video_check=on_video_check,
             )
         )
         if not courses:
