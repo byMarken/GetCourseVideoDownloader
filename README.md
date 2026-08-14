@@ -12,6 +12,11 @@
 </p>
 
 <p align="center">
+  <img
+    src="https://raw.githubusercontent.com/markpekun/getcourse-downloader-assets/main/picture/courses.png"
+    alt="Интерфейс GetCourse Video Downloader"
+    width="1200"
+  />
 </p>
 
 ## Возможности
