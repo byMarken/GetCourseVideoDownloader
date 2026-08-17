@@ -45,7 +45,7 @@ getcourse-live-browser = "getcourse_downloader.presentation.cli.live_browser:mai
 [dependency-groups]
 dev = [
   "mypy>=2.3,<3",
-  "pre-commit>=4.6,<5",
+  "pre-commit>=4.6.2,<5",
   "pytest>=9.1,<10",
   "pytest-cov>=7,<8",
   "ruff>=0.16,<0.17",
