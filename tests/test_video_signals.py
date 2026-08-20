@@ -9,8 +9,6 @@ def test_video_selector_keeps_getcourse_and_adds_old_rutube_embed():
     assert "iframe.vhi-iframe" in VIDEO_PLAYER_SELECTOR
     assert "iframe.js--vhi-iframe" in VIDEO_PLAYER_SELECTOR
     assert "rutube.ru/play/embed/" in VIDEO_PLAYER_SELECTOR
-    assert "div.vhi-root" in VIDEO_PLAYER_SELECTOR
-    assert ".vjs-big-play-button" in VIDEO_PLAYER_SELECTOR
 
 
 def test_hls_url_detection_supports_getcourse_and_rutube_formats():

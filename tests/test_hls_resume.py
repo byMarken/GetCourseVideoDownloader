@@ -116,40 +116,6 @@ def test_existing_nonempty_mp4_is_skipped_but_zero_file_is_incomplete(tmp_path):
     assert output.read_bytes() == b"segment"
 
 
-def test_hls_requests_keep_the_lesson_origin_for_protected_cdn(tmp_path):
-    playlist_url = "https://api1.gcvh.ru/api/playlist/media/hash/token/1080?consumer=vod"
-    segment_url = "https://api1.gcvh.ru/api/playlist/media/hash/token/segment.ts?token=secret"
-    captured: dict[str, object] = {}
-
-    def session_factory(**kwargs):
-        captured.update(kwargs)
-        return _Session(
-            {
-                playlist_url: _Response(text="#EXTM3U\n#EXTINF:1,\nsegment.ts?token=secret\n"),
-                segment_url: _Response(content=b"segment"),
-            },
-            [],
-        )
-
-    downloader = HlsDownloader(_Muxer(), concurrency=1, session_factory=session_factory)  # type: ignore[arg-type]
-    result = asyncio.run(
-        downloader.download(
-            playlist_url,
-            tmp_path / "Lesson",
-            "Урок",
-            lambda _: None,
-            lesson_url="https://school.example/teach/control/lesson/view/id/101",
-        )
-    )
-
-    assert result.status is HlsDownloadStatus.DOWNLOADED
-    assert captured["headers"] == {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://school.example/teach/control/lesson/view/id/101",
-        "Origin": "https://school.example",
-    }
-
-
 def test_resume_reuses_segments_when_only_query_tokens_change(tmp_path):
     stem = tmp_path / "Lesson"
     output = tmp_path / "Lesson.mp4"

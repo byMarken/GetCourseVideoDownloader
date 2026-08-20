@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
+from getcourse_downloader.domain.models import Lesson
 from getcourse_downloader.infrastructure.getcourse.discovery import (
     GetCourseDiscoverer,
     clean_title,
-    extract_lesson_urls,
     extract_stream_urls,
     normalize_lesson_url,
     normalize_stream_url,
@@ -106,22 +106,6 @@ def test_extract_stream_urls_from_widget_javascript():
     ]
 
 
-def test_extract_lesson_urls_from_custom_page_html():
-    html = r"""
-        <script>
-            lesson = "https:\/\/school.example\/teach\/control\/lesson\/view\/id\/100";
-            duplicate = "/teach/control/lesson/view/id/100";
-            nested = "/pl/teach/control/lesson/view?id=200&editMode=0";
-            foreign = "https:\/\/another.example\/teach\/control\/lesson\/view\/id\/300";
-        </script>
-    """
-
-    assert extract_lesson_urls(html, "https://school.example/teach/control") == [
-        "https://school.example/teach/control/lesson/view/id/100",
-        "https://school.example/teach/control/lesson/view/id/200",
-    ]
-
-
 def test_normalize_getcourse_content_urls():
     base_url = "https://school.example/teach/control"
 
@@ -146,22 +130,46 @@ def test_normalize_getcourse_content_urls():
         )
         is None
     )
+    assert (
+        normalize_stream_url(
+            base_url,
+            "http://school.example/teach/control/stream/view/id/123",
+        )
+        == "https://school.example/teach/control/stream/view/id/123"
+    )
+
+
+def test_resolve_fallback_lesson_title_from_page_title():
+    lesson_url = "https://school.example/teach/control/lesson/view/id/456"
+
+    class TitlePage:
+        async def goto(self, url: str, **_: object) -> None:
+            assert url == lesson_url
+
+        async def title(self) -> str:
+            return "  Урок 2: Работа с 3D моделями  "
+
+    lessons = [Lesson(title="Урок 456", url=lesson_url)]
+    resolved = asyncio.run(
+        GetCourseDiscoverer._resolve_lesson_titles(  # type: ignore[arg-type]
+            TitlePage(),
+            tuple(lessons),
+        )
+    )
+
+    assert resolved[0].title == "Урок 2: Работа с 3D моделями"
 
 
 class _FakeElement:
-    def __init__(self, *, html: str = "", text: str = "", href: str | None = None) -> None:
+    def __init__(self, *, html: str = "", text: str = "") -> None:
         self._html = html
         self._text = text
-        self._href = href
 
     async def inner_html(self) -> str:
         return self._html
 
     async def inner_text(self) -> str:
         return self._text
-
-    async def get_attribute(self, name: str) -> str | None:
-        return self._href if name == "href" else None
 
 
 class _FakePage:
@@ -199,20 +207,8 @@ class _FakePage:
         current = self._pages[self.url]
         if selector == "tr.training-row":
             return [_FakeElement(html=str(html)) for html in current.get("stream_rows", [])]
-        if selector == ".training-item":
-            return [_FakeElement(html=str(html)) for html in current.get("training_items", [])]
-        if selector == "a[href*='/teach/control/stream/']":
-            return [
-                _FakeElement(href=href, text=title)
-                for href, title in current.get("stream_links", [])
-            ]
         if selector == "ul.lesson-list li":
             return [_FakeElement(html=str(html)) for html in current.get("lessons", [])]
-        if selector == "a[href*='/teach/control/lesson/']":
-            return [
-                _FakeElement(href=href, text=title)
-                for href, title in current.get("lesson_links", [])
-            ]
         return []
 
     async def query_selector(self, selector: str) -> _FakeElement | None:
@@ -498,58 +494,3 @@ def test_regex_fallback_is_not_used_on_non_landing_page():
 
     assert courses == []
     assert browser.visited_urls == []
-
-
-def test_discovery_finds_stream_and_lesson_links_in_custom_tiles():
-    base = "https://school.example"
-    landing_url = f"{base}/teach/control"
-    stream_url = f"{base}/teach/control/stream/view/id/100"
-    pages = {
-        landing_url: {
-            "stream_links": [("/teach/control/stream/view/id/100", "Курс в плитке")],
-        },
-        stream_url: {
-            "title": "Курс в плитке",
-            "content": "",
-            "lesson_links": [
-                ("/teach/control/lesson/view/id/101", "Урок в плитке"),
-            ],
-        },
-    }
-    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
-    browser = _FakeBrowser(pages)
-
-    courses = asyncio.run(
-        discoverer._parse_page(  # type: ignore[arg-type]
-            browser,
-            browser.landing_page(landing_url),
-            landing_url,
-        )
-    )
-
-    assert [(course.title, [lesson.title for lesson in course.lessons]) for course in courses] == [
-        ("Курс в плитке", ["Урок в плитке"])
-    ]
-
-
-def test_discovery_falls_back_to_lesson_urls_embedded_in_page_html():
-    base = "https://school.example"
-    stream_url = f"{base}/teach/control/stream/view/id/100"
-    pages = {
-        stream_url: {
-            "title": "Курс",
-            "content": r'lesson="\/teach\/control\/lesson\/view\/id\/101";',
-        }
-    }
-    discoverer = GetCourseDiscoverer(browser_factory=None)  # type: ignore[arg-type]
-    browser = _FakeBrowser(pages)
-
-    courses = asyncio.run(
-        discoverer._parse_page(  # type: ignore[arg-type]
-            browser,
-            browser.landing_page(stream_url),
-            stream_url,
-        )
-    )
-
-    assert [lesson.title for lesson in courses[0].lessons] == ["Урок 101"]

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
@@ -27,6 +30,19 @@ _STREAM_REFERENCE_RE = re.compile(
     r"(?:(?:https?:)?//[^\"'<>\s\\]+)?/(?:pl/)?teach/control/stream/"
     r"(?:view/id/\d+|view\?[^\"'<>\s\\]*\bid=\d+[^\"'<>\s\\]*)",
     flags=re.IGNORECASE,
+)
+
+_PARENT_STREAM_REFERENCE_RE = re.compile(
+    r"(?:parent|back|breadcrumb)[^\n]{0,160}?"
+    r"((?:(?:https?:)?//[^\"'<>\s\\]+)?/(?:pl/)?teach/control/stream/"
+    r"(?:view/id/\d+|view\?[^\"'<>\s\\]*\bid=\d+[^\"'<>\s\\]*))",
+    flags=re.IGNORECASE,
+)
+
+_BREADCRUMB_BLOCK_RE = re.compile(
+    r"<(?:div|nav|ol)[^>]*class=[\"'][^\"']*breadcrumb[^\"']*[\"'][^>]*>"
+    r".*?</(?:div|nav|ol)>",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 
 _LESSON_REFERENCE_RE = re.compile(
@@ -57,6 +73,22 @@ def clean_title(title: str) -> str:
         flags=re.IGNORECASE,
     )
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _is_navigation_title(title: str) -> bool:
+    normalized = clean_title(title).casefold().strip("<›»←→ ")
+    return normalized in {"назад", "back", "список тренингов"}
+
+
+def _is_unhelpful_lesson_title(title: str) -> bool:
+    normalized = clean_title(title).casefold().strip("↗›» ")
+    return not normalized or normalized in {
+        "смотреть",
+        "открыть",
+        "перейти",
+        "начать",
+        "продолжить",
+    }
 
 
 class _FragmentParser(HTMLParser):
@@ -134,7 +166,7 @@ def _canonical_content_url(base_url: str, candidate: str, kind: str) -> str | No
         return None
     return urlunsplit(
         (
-            parsed.scheme or base.scheme,
+            base.scheme,
             parsed.netloc,
             f"/teach/control/{kind}/view/id/{identifier}",
             "",
@@ -157,18 +189,6 @@ def extract_stream_urls(html: str, base_url: str) -> list[str]:
     seen: set[str] = set()
     for match in _STREAM_REFERENCE_RE.finditer(normalized_html):
         url = normalize_stream_url(base_url, match.group(0))
-        if url and url not in seen:
-            seen.add(url)
-            result.append(url)
-    return result
-
-
-def extract_lesson_urls(html: str, base_url: str) -> list[str]:
-    normalized_html = unescape(html).replace("\\/", "/")
-    result: list[str] = []
-    seen: set[str] = set()
-    for match in _LESSON_REFERENCE_RE.finditer(normalized_html):
-        url = normalize_lesson_url(base_url, match.group(0))
         if url and url not in seen:
             seen.add(url)
             result.append(url)
@@ -198,11 +218,24 @@ class GetCourseDiscoverer:
         browser_factory: PlaywrightBrowserFactory,
         *,
         concurrency: int = DISCOVERY_CONCURRENCY,
+        diagnostic_log: Path | None = None,
     ) -> None:
         if concurrency < 1 or concurrency > DISCOVERY_CONCURRENCY:
             raise ValueError(f"concurrency must be between 1 and {DISCOVERY_CONCURRENCY}")
         self._browsers = browser_factory
         self._concurrency = concurrency
+        self._diagnostic_log = diagnostic_log
+
+    def _diagnostic(self, event: str, **details: object) -> None:
+        if self._diagnostic_log is None:
+            return
+        payload = {"time": time.time(), "event": event, **details}
+        try:
+            self._diagnostic_log.parent.mkdir(parents=True, exist_ok=True)
+            with self._diagnostic_log.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     async def discover(
         self,
@@ -472,8 +505,20 @@ class GetCourseDiscoverer:
             await self._extract_stream_links(
                 page,
                 page.url,
-                allow_fallback=False,
+                allow_fallback=True,
             )
+        )
+        normalized_self = normalize_stream_url(page.url, page.url)
+        children = tuple(
+            child for child in children if child.url != normalized_self and child.url != stream.url
+        )
+        lessons = tuple(await self._resolve_lesson_titles(page, lessons))
+        self._diagnostic(
+            "stream_discovered",
+            stream_url=stream.url,
+            title=title,
+            lessons=[{"title": lesson.title, "url": lesson.url} for lesson in lessons],
+            children=[{"title": child.title, "url": child.url} for child in children],
         )
         return _StreamSnapshot(title=title, lessons=lessons, children=children)
 
@@ -503,18 +548,7 @@ class GetCourseDiscoverer:
         )
 
     @staticmethod
-    async def _link_details(element, parser) -> tuple[str, str | None]:
-        title, href = parser(await element.inner_html())
-        if href != "#":
-            return title, href
-        href = await element.get_attribute("href")
-        if href:
-            return clean_title(await element.inner_text()) or "Без названия", href
-        return title, None
-
-    @classmethod
     async def _extract_stream_links(
-        cls,
         page: Page,
         base_url: str,
         *,
@@ -522,22 +556,58 @@ class GetCourseDiscoverer:
     ) -> list[_StreamLink]:
         ordered: list[_StreamLink] = []
         indexes: dict[str, int] = {}
+        navigation_urls: set[str] = set()
+
+        navigation_links = await page.query_selector_all(
+            ".breadcrumb a[href*='/teach/control/stream/'], "
+            ".breadcrumbs a[href*='/teach/control/stream/'], "
+            ".breadcrumb-item a[href*='/teach/control/stream/']"
+        )
+        for link in navigation_links:
+            navigation_href = await link.get_attribute("href")
+            url = normalize_stream_url(base_url, navigation_href) if navigation_href else None
+            if url:
+                navigation_urls.add(url)
 
         rows = await page.query_selector_all("tr.training-row")
-        rows.extend(await page.query_selector_all(".training-item"))
-        rows.extend(await page.query_selector_all("a[href*='/teach/control/stream/']"))
-        for row in rows:
-            title, href = await cls._link_details(row, parse_course_row)
+        standard_row_count = len(rows)
+        rows.extend(
+            await page.query_selector_all(".training-item, a[href*='/teach/control/stream/']")
+        )
+        for row_index, row in enumerate(rows):
+            title, parsed_href = parse_course_row(await row.inner_html())
+            href: str | None = parsed_href
+            if href == "#" and row_index >= standard_row_count:
+                href = await row.get_attribute("href")
+                title = clean_title(await row.inner_text()) if href else ""
+                if not href:
+                    anchor = await row.query_selector("a[href*='/teach/control/stream/']")
+                    if anchor:
+                        href = await anchor.get_attribute("href")
+                        title = clean_title(await anchor.inner_text())
             url = normalize_stream_url(base_url, href) if href else None
             if not url or url in indexes:
                 continue
             hint = title if title != "Без названия" else None
+            if hint and _is_navigation_title(hint):
+                navigation_urls.add(url)
+                continue
+            if url in navigation_urls:
+                continue
             indexes[url] = len(ordered)
             ordered.append(_StreamLink(url=url, title=hint))
 
-        if allow_fallback and not ordered:
-            for url in extract_stream_urls(await page.content(), base_url):
-                if url not in indexes:
+        if allow_fallback:
+            content = await page.content()
+            normalized_content = unescape(content).replace("\\/", "/")
+            for block in _BREADCRUMB_BLOCK_RE.findall(normalized_content):
+                navigation_urls.update(extract_stream_urls(block, base_url))
+            for match in _PARENT_STREAM_REFERENCE_RE.finditer(normalized_content):
+                parent_url = normalize_stream_url(base_url, match.group(1))
+                if parent_url:
+                    navigation_urls.add(parent_url)
+            for url in extract_stream_urls(content, base_url):
+                if url not in indexes and url not in navigation_urls:
                     indexes[url] = len(ordered)
                     ordered.append(_StreamLink(url=url))
         return ordered
@@ -558,25 +628,59 @@ class GetCourseDiscoverer:
     @classmethod
     async def _read_lessons(cls, page: Page, base_url: str) -> list[Lesson]:
         elements = await page.query_selector_all("ul.lesson-list li")
+        standard_element_count = len(elements)
         elements.extend(await page.query_selector_all("a[href*='/teach/control/lesson/']"))
         lessons: list[Lesson] = []
         seen: set[str] = set()
-        for element in elements:
-            title, href = await cls._link_details(element, parse_lesson_item)
+        for element_index, element in enumerate(elements):
+            title, parsed_href = parse_lesson_item(await element.inner_html())
+            href: str | None = parsed_href
+            if href == "#" and element_index >= standard_element_count:
+                href = await element.get_attribute("href")
+                title = clean_title(await element.inner_text()) if href else ""
+                if not href:
+                    anchor = await element.query_selector("a[href*='/teach/control/lesson/']")
+                    if anchor:
+                        href = await anchor.get_attribute("href")
+                        title = clean_title(await anchor.inner_text())
             url = normalize_lesson_url(base_url, href) if href else None
             if not url or url in seen:
                 continue
             seen.add(url)
-            identifier = url.rstrip("/").rsplit("/", maxsplit=1)[-1]
-            lessons.append(
-                Lesson(
-                    title=title if title != "Без названия" else f"Урок {identifier}",
-                    url=url,
-                )
+            lesson_title = (
+                cls._fallback_lesson_title(url) if _is_unhelpful_lesson_title(title) else title
             )
-        if lessons:
-            return lessons
-        for url in extract_lesson_urls(await page.content(), base_url):
-            identifier = url.rstrip("/").rsplit("/", maxsplit=1)[-1]
-            lessons.append(Lesson(title=f"Урок {identifier}", url=url))
+            lessons.append(Lesson(title=lesson_title, url=url))
+
+        content = unescape(await page.content()).replace("\\/", "/")
+        for match in _LESSON_REFERENCE_RE.finditer(content):
+            url = normalize_lesson_url(base_url, match.group(0))
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            lessons.append(Lesson(title=cls._fallback_lesson_title(url), url=url))
         return lessons
+
+    @staticmethod
+    def _fallback_lesson_title(url: str) -> str:
+        identifier = url.rstrip("/").rsplit("/", maxsplit=1)[-1]
+        return f"Урок {identifier}"
+
+    @classmethod
+    async def _resolve_lesson_titles(
+        cls,
+        page: Page,
+        lessons: tuple[Lesson, ...],
+    ) -> list[Lesson]:
+        resolved: list[Lesson] = []
+        for lesson in lessons:
+            if lesson.title != cls._fallback_lesson_title(lesson.url):
+                resolved.append(lesson)
+                continue
+            try:
+                await page.goto(lesson.url, wait_until="domcontentloaded", timeout=30_000)
+                title = clean_title(await page.title())
+            except Exception:
+                title = ""
+            resolved.append(Lesson(title=title or lesson.title, url=lesson.url))
+        return resolved
