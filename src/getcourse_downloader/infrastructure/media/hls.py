@@ -272,10 +272,13 @@ class HlsDownloader:
             )
 
         parts = urlsplit(playlist_url)
+        lesson_parts = urlsplit(lesson_url) if lesson_url else None
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": f"{parts.scheme}://{parts.netloc}/",
+            "Referer": lesson_url or f"{parts.scheme}://{parts.netloc}/",
         }
+        if lesson_parts and lesson_parts.scheme and lesson_parts.netloc:
+            headers["Origin"] = f"{lesson_parts.scheme}://{lesson_parts.netloc}"
         timeout = aiohttp.ClientTimeout(
             total=600,
             connect=15,

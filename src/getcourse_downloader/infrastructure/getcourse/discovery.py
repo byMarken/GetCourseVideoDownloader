@@ -29,6 +29,12 @@ _STREAM_REFERENCE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+_LESSON_REFERENCE_RE = re.compile(
+    r"(?:(?:https?:)?//[^\"'<>\s\\]+)?/(?:pl/)?teach/control/lesson/"
+    r"(?:view/id/\d+|view\?[^\"'<>\s\\]*\bid=\d+[^\"'<>\s\\]*)",
+    flags=re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _StreamLink:
@@ -151,6 +157,18 @@ def extract_stream_urls(html: str, base_url: str) -> list[str]:
     seen: set[str] = set()
     for match in _STREAM_REFERENCE_RE.finditer(normalized_html):
         url = normalize_stream_url(base_url, match.group(0))
+        if url and url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
+
+
+def extract_lesson_urls(html: str, base_url: str) -> list[str]:
+    normalized_html = unescape(html).replace("\\/", "/")
+    result: list[str] = []
+    seen: set[str] = set()
+    for match in _LESSON_REFERENCE_RE.finditer(normalized_html):
+        url = normalize_lesson_url(base_url, match.group(0))
         if url and url not in seen:
             seen.add(url)
             result.append(url)
@@ -485,7 +503,18 @@ class GetCourseDiscoverer:
         )
 
     @staticmethod
+    async def _link_details(element, parser) -> tuple[str, str | None]:
+        title, href = parser(await element.inner_html())
+        if href != "#":
+            return title, href
+        href = await element.get_attribute("href")
+        if href:
+            return clean_title(await element.inner_text()) or "Без названия", href
+        return title, None
+
+    @classmethod
     async def _extract_stream_links(
+        cls,
         page: Page,
         base_url: str,
         *,
@@ -495,9 +524,11 @@ class GetCourseDiscoverer:
         indexes: dict[str, int] = {}
 
         rows = await page.query_selector_all("tr.training-row")
+        rows.extend(await page.query_selector_all(".training-item"))
+        rows.extend(await page.query_selector_all("a[href*='/teach/control/stream/']"))
         for row in rows:
-            title, href = parse_course_row(await row.inner_html())
-            url = normalize_stream_url(base_url, href)
+            title, href = await cls._link_details(row, parse_course_row)
+            url = normalize_stream_url(base_url, href) if href else None
             if not url or url in indexes:
                 continue
             hint = title if title != "Без названия" else None
@@ -524,16 +555,28 @@ class GetCourseDiscoverer:
         identifier = stream.url.rstrip("/").rsplit("/", maxsplit=1)[-1]
         return f"Курс {identifier}"
 
-    @staticmethod
-    async def _read_lessons(page: Page, base_url: str) -> list[Lesson]:
+    @classmethod
+    async def _read_lessons(cls, page: Page, base_url: str) -> list[Lesson]:
         elements = await page.query_selector_all("ul.lesson-list li")
+        elements.extend(await page.query_selector_all("a[href*='/teach/control/lesson/']"))
         lessons: list[Lesson] = []
         seen: set[str] = set()
         for element in elements:
-            title, href = parse_lesson_item(await element.inner_html())
-            url = normalize_lesson_url(base_url, href)
-            if not url or title == "Без названия" or url in seen:
+            title, href = await cls._link_details(element, parse_lesson_item)
+            url = normalize_lesson_url(base_url, href) if href else None
+            if not url or url in seen:
                 continue
             seen.add(url)
-            lessons.append(Lesson(title=title, url=url))
+            identifier = url.rstrip("/").rsplit("/", maxsplit=1)[-1]
+            lessons.append(
+                Lesson(
+                    title=title if title != "Без названия" else f"Урок {identifier}",
+                    url=url,
+                )
+            )
+        if lessons:
+            return lessons
+        for url in extract_lesson_urls(await page.content(), base_url):
+            identifier = url.rstrip("/").rsplit("/", maxsplit=1)[-1]
+            lessons.append(Lesson(title=f"Урок {identifier}", url=url))
         return lessons
