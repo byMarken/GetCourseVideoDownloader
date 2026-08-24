@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import threading
 import time
 from collections import Counter
@@ -28,13 +27,10 @@ from getcourse_downloader.infrastructure.media.hls import (
     HlsDownloader,
     HlsDownloadStatus,
     canonical_media_url,
-    extract_quality,
     is_hls_master_playlist,
     is_hls_playlist,
-    media_family_url,
     select_stream_playlist_url,
 )
-from getcourse_downloader.infrastructure.storage.course_site import generate_course_site
 from getcourse_downloader.infrastructure.storage.download_catalog import (
     DownloadedMedia,
     JsonDownloadCatalog,
@@ -46,7 +42,7 @@ from getcourse_downloader.infrastructure.storage.filenames import (
 )
 
 PLAYLIST_WAIT_SECONDS = 30.0
-PLAYLIST_QUIET_SECONDS = 3.0
+PLAYLIST_QUIET_SECONDS = 1.0
 
 
 class _AuthenticationExpired(RuntimeError):
@@ -81,25 +77,12 @@ class PlaywrightDownloadGateway:
         browsers: PlaywrightBrowserFactory,
         hls: HlsDownloader,
         catalog: JsonDownloadCatalog | None = None,
-        diagnostic_log: Path | None = None,
     ) -> None:
         self._browsers = browsers
         self._hls = hls
         self._catalog = catalog
-        self._diagnostic_log = diagnostic_log
         self._cancelled = threading.Event()
         self._authentication_continued = threading.Event()
-
-    def _diagnostic(self, event: str, **details: object) -> None:
-        if self._diagnostic_log is None:
-            return
-        payload = {"time": time.time(), "event": event, **details}
-        try:
-            self._diagnostic_log.parent.mkdir(parents=True, exist_ok=True)
-            with self._diagnostic_log.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        except OSError:
-            pass
 
     def run(self, request: DownloadRequest, on_event: EventHandler) -> DownloadSummary:
         self._cancelled.clear()
@@ -346,21 +329,6 @@ class PlaywrightDownloadGateway:
                     with contextlib.suppress(PlaywrightError):
                         await browser.close()
 
-        site_path: Path | None = None
-        try:
-            site_path = generate_course_site(request, output_stems, self._catalog)
-        except OSError as error:
-            self._diagnostic("site_generation_failed", error=str(error))
-        if site_path:
-            emit(
-                DownloadEvent(
-                    DownloadEventType.LOG,
-                    message=f"Локальный сайт обновлён: {site_path}",
-                    stage="site",
-                    level="success",
-                )
-            )
-
         summary = DownloadSummary(
             total=len(request.lessons),
             downloaded=downloaded,
@@ -478,7 +446,6 @@ class PlaywrightDownloadGateway:
             return existing
 
         page = await browser.new_page()
-        await page.set_viewport_size({"width": 1920, "height": 1080})
         playlists: dict[str, _Playlist] = {}
         response_tasks: set[asyncio.Task[None]] = set()
         last_playlist_at = 0.0
@@ -495,13 +462,6 @@ class PlaywrightDownloadGateway:
             if is_hls_master_playlist(text) or is_hls_playlist(text):
                 playlists[url] = _Playlist(url, text)
                 last_playlist_at = time.monotonic()
-                self._diagnostic(
-                    "playlist_captured",
-                    lesson=item.lesson.url,
-                    playlist=url,
-                    quality=extract_quality(url),
-                    master=is_hls_master_playlist(text),
-                )
 
         def schedule_response(response) -> None:
             task = asyncio.create_task(on_response(response))
@@ -523,7 +483,6 @@ class PlaywrightDownloadGateway:
                 raise _AuthenticationExpired
 
             player_present = await self._has_supported_player(page)
-            await self._activate_players(page)
             started_at = time.monotonic()
             while time.monotonic() - started_at < PLAYLIST_WAIT_SECONDS:
                 if self._cancelled.is_set():
@@ -534,8 +493,6 @@ class PlaywrightDownloadGateway:
 
             if response_tasks:
                 await asyncio.gather(*tuple(response_tasks), return_exceptions=True)
-
-            page_media = await self._save_lesson_page(page, output_stem, item.lesson.url)
 
             if not playlists:
                 player_present = player_present or await self._has_supported_player(page)
@@ -550,18 +507,9 @@ class PlaywrightDownloadGateway:
                         )
                     )
                     return _LessonResult(_LessonStatus.FAILED)
-                if page_media:
-                    return _LessonResult(_LessonStatus.DOWNLOADED, (page_media,))
                 return _LessonResult(_LessonStatus.NO_VIDEO)
 
             selected = self._select_playlist_urls(playlists.values(), quality)
-            self._diagnostic(
-                "playlist_selection",
-                lesson=item.lesson.url,
-                requested_quality=quality,
-                captured=list(playlists),
-                selected=selected,
-            )
 
             if not selected:
                 emit(
@@ -602,8 +550,6 @@ class PlaywrightDownloadGateway:
                 for result in download_results
                 if result.output_path is not None
             )
-            if page_media:
-                media = (*media, page_media)
             if all(status is HlsDownloadStatus.ALREADY_PRESENT for status in statuses):
                 return _LessonResult(_LessonStatus.SKIPPED, media)
             return _LessonResult(_LessonStatus.DOWNLOADED, media)
@@ -617,84 +563,12 @@ class PlaywrightDownloadGateway:
 
     @staticmethod
     def _select_playlist_urls(playlists: Iterable[_Playlist], quality: str) -> list[str]:
-        variants_by_video: dict[str, dict[int, str]] = {}
+        selected: dict[str, str] = {}
         for playlist in playlists:
             selected_url = select_stream_playlist_url(playlist.text, playlist.url, quality)
-            if not selected_url:
-                continue
-            family = media_family_url(selected_url)
-            variants = variants_by_video.setdefault(family, {})
-            selected_quality = extract_quality(selected_url)
-            if is_hls_master_playlist(playlist.text):
-                variants[selected_quality] = selected_url
-            else:
-                variants.setdefault(selected_quality, selected_url)
-
-        selected: dict[str, str] = {}
-        for variants in variants_by_video.values():
-            available = sorted(variants)
-            if not available:
-                continue
-            if not quality or quality == "auto":
-                chosen = available[-1]
-            else:
-                target = int(quality)
-                below = [candidate for candidate in available if candidate <= target]
-                chosen = below[-1] if below else available[0]
-            url = variants[chosen]
-            selected.setdefault(canonical_media_url(url), url)
+            if selected_url:
+                selected.setdefault(canonical_media_url(selected_url), selected_url)
         return [selected[key] for key in sorted(selected)]
-
-    async def _activate_players(self, page: Any) -> None:
-        frames = [page]
-        with contextlib.suppress(Exception):
-            frames.extend(frame for frame in page.frames if frame is not page.main_frame)
-        for frame in frames:
-            with contextlib.suppress(Exception):
-                await frame.evaluate(
-                    """() => {
-                        for (const media of document.querySelectorAll('video, audio')) {
-                            media.muted = true;
-                            media.volume = 0;
-                            media.setAttribute('playsinline', '');
-                        }
-                    }"""
-                )
-            for selector in (
-                ".vjs-big-play-button",
-                "button[aria-label*='Play']",
-                "button[aria-label*='Воспроиз']",
-                "div.vhi-root",
-                "video",
-            ):
-                with contextlib.suppress(Exception):
-                    element = await frame.query_selector(selector)
-                    if element:
-                        await element.click(timeout=3000)
-                        break
-        self._diagnostic("player_activated", frames=len(frames), viewport="1920x1080")
-
-    @staticmethod
-    async def _save_lesson_page(
-        page: Any,
-        output_stem: Path,
-        lesson_url: str,
-    ) -> DownloadedMedia | None:
-        try:
-            html = await page.content()
-        except Exception:
-            return None
-        if not html.strip():
-            return None
-        base = f'<base href="{lesson_url}">'
-        html = html.replace("<head>", f"<head>{base}", 1)
-        output = output_stem.with_suffix(".html")
-        try:
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(html, encoding="utf-8")
-        except OSError:
-            return None
-        return DownloadedMedia(output, "HTML")
 
     @staticmethod
     async def _has_supported_player(page: Any) -> bool:

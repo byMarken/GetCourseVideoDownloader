@@ -50,15 +50,12 @@ class _Page:
     async def close(self):
         return None
 
-    async def set_viewport_size(self, viewport):
-        assert viewport == {"width": 1920, "height": 1080}
-
 
 class _Browser:
     def __init__(self, page):
         self.page = page
 
-    async def new_page(self, **_):
+    async def new_page(self):
         return self.page
 
 
@@ -204,63 +201,6 @@ def test_multiple_video_order_is_stable_despite_response_order():
         "https://cdn.example/a.m3u8",
         "https://cdn.example/z.m3u8",
     ]
-
-
-def test_direct_getcourse_variants_select_only_requested_quality():
-    def playlist(quality: int) -> _Playlist:
-        return _Playlist(
-            f"https://api1.gcvh.ru/api/playlist/media/video/token/{quality}?jwt=x",
-            "#EXTM3U\n#EXTINF:5,\nsegment.ts\n",
-        )
-
-    selected = PlaywrightDownloadGateway._select_playlist_urls(
-        (playlist(360), playlist(720), playlist(1080)),
-        "1080",
-    )
-
-    assert selected == ["https://api1.gcvh.ru/api/playlist/media/video/token/1080?jwt=x"]
-
-
-def test_master_and_direct_variant_of_same_video_choose_only_highest():
-    master = _Playlist(
-        "https://api3.gcvh.ru/api/playlist/master/video/token",
-        "#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=1920x1080\n"
-        "https://api1.gcvh.ru/api/playlist/media/video/token/1080?cdn=gcore\n",
-    )
-    direct_720 = _Playlist(
-        "https://api1.gcvh.ru/api/playlist/media/video/token/720?cdn=proxy",
-        "#EXTM3U\n#EXTINF:5,\nsegment.ts\n",
-    )
-
-    assert PlaywrightDownloadGateway._select_playlist_urls((master, direct_720), "auto") == [
-        "https://api1.gcvh.ru/api/playlist/media/video/token/1080?cdn=gcore"
-    ]
-
-
-def test_text_lesson_is_saved_as_html(monkeypatch, tmp_path):
-    class TextPage(_Page):
-        async def content(self):
-            return "<html><head></head><body><h1>Контрольная работа</h1></body></html>"
-
-    monkeypatch.setattr(downloader_module, "PLAYLIST_WAIT_SECONDS", 0.0)
-    gateway = PlaywrightDownloadGateway(None, _Hls())  # type: ignore[arg-type]
-    stem = tmp_path / "Course" / "Контрольная работа"
-
-    result = asyncio.run(
-        gateway._download_lesson(
-            _Browser(TextPage(player=False)),
-            _item(),
-            stem,
-            "auto",
-            lambda _: None,
-        )
-    )
-
-    assert result.status.value == "downloaded"
-    assert result.media[0].path == stem.with_suffix(".html")
-    assert '<base href="https://school/lesson/1">' in stem.with_suffix(".html").read_text(
-        encoding="utf-8"
-    )
 
 
 def test_output_stems_preserve_hierarchy_and_hash_all_collisions(tmp_path):

@@ -101,17 +101,6 @@ def canonical_media_url(url: str) -> str:
     return urlunsplit((parts.scheme.casefold(), parts.netloc.casefold(), parts.path, "", ""))
 
 
-def media_family_url(url: str) -> str:
-    """Group direct GetCourse variants that differ only by trailing quality."""
-
-    canonical = canonical_media_url(url)
-    parts = urlsplit(canonical)
-    path_parts = parts.path.rstrip("/").split("/")
-    if path_parts and path_parts[-1].isdigit():
-        path_parts[-1] = "{quality}"
-    return urlunsplit((parts.scheme, parts.netloc, "/".join(path_parts), "", ""))
-
-
 class HlsDownloadStatus(StrEnum):
     DOWNLOADED = "downloaded"
     ALREADY_PRESENT = "already_present"
@@ -282,14 +271,11 @@ class HlsDownloader:
                 level=level,
             )
 
-        playlist_parts = urlsplit(playlist_url)
-        lesson_parts = urlsplit(lesson_url) if lesson_url else None
+        parts = urlsplit(playlist_url)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": lesson_url or f"{playlist_parts.scheme}://{playlist_parts.netloc}/",
+            "Referer": f"{parts.scheme}://{parts.netloc}/",
         }
-        if lesson_parts and lesson_parts.scheme and lesson_parts.netloc:
-            headers["Origin"] = f"{lesson_parts.scheme}://{lesson_parts.netloc}"
         timeout = aiohttp.ClientTimeout(
             total=600,
             connect=15,

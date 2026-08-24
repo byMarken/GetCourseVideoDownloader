@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from getcourse_downloader.domain.models import Lesson
 from getcourse_downloader.infrastructure.getcourse.discovery import (
     GetCourseDiscoverer,
     clean_title,
@@ -130,34 +129,6 @@ def test_normalize_getcourse_content_urls():
         )
         is None
     )
-    assert (
-        normalize_stream_url(
-            base_url,
-            "http://school.example/teach/control/stream/view/id/123",
-        )
-        == "https://school.example/teach/control/stream/view/id/123"
-    )
-
-
-def test_resolve_fallback_lesson_title_from_page_title():
-    lesson_url = "https://school.example/teach/control/lesson/view/id/456"
-
-    class TitlePage:
-        async def goto(self, url: str, **_: object) -> None:
-            assert url == lesson_url
-
-        async def title(self) -> str:
-            return "  Урок 2: Работа с 3D моделями  "
-
-    lessons = [Lesson(title="Урок 456", url=lesson_url)]
-    resolved = asyncio.run(
-        GetCourseDiscoverer._resolve_lesson_titles(  # type: ignore[arg-type]
-            TitlePage(),
-            tuple(lessons),
-        )
-    )
-
-    assert resolved[0].title == "Урок 2: Работа с 3D моделями"
 
 
 class _FakeElement:

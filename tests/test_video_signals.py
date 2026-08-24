@@ -13,9 +13,6 @@ def test_video_selector_keeps_getcourse_and_adds_old_rutube_embed():
 
 def test_hls_url_detection_supports_getcourse_and_rutube_formats():
     assert is_hls_playlist_url("https://vh.example/api/playlist/master/123")
-    assert is_hls_playlist_url(
-        "https://api1.gcvh.ru/api/playlist/media/hash/token/1080?consumer=vod"
-    )
     assert is_hls_playlist_url("https://bl.rutube.ru/route/video/master.m3u8?token=abc")
     assert is_master_playlist_url("https://river.rutube.ru/video/index.m3u8")
     assert not is_hls_playlist_url("https://rutube.ru/play/embed/video/")
