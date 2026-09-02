@@ -87,6 +87,7 @@
 
 <br>
 
+
 <p align="center">
   <a href="https://github.com/markpekun/getcourse-downloader/releases/latest">
     <img
@@ -195,8 +196,9 @@ MP4-файл.
 </div>
 
 <br>
+<br>
 
----
+
 
 ## Для разработчиков
 
@@ -248,7 +250,7 @@ Playwright / HLS / FFmpeg / JSON adapters
 
 Подробное описание находится в [ARCHITECTURE.md](ARCHITECTURE.md).
 
----
+
 
 
 
